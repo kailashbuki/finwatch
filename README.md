@@ -109,6 +109,19 @@ of third-party series, and OECD SDMX serves the same data with no key),
 and **AidData / Horn–Reinhart–Trebesch** China-lending datasets (excellent, but no explicit
 open license — pending a decision).
 
+## Map interaction
+
+- **Scroll or +/−** to zoom (1–12×), **drag** to pan, **⌂** to reset.
+- **◍ Globe / ▭ Flat** toggles an orthographic globe. Drag to rotate; selecting a country
+  spins it into view, which is required rather than decorative — a country on the far side
+  would otherwise show no arcs at all.
+- The globe is the truer view for flows: great circles on a sphere need no antimeridian
+  clipping, so Japan→US visibly crosses the Pacific and the Arctic instead of being cut at the
+  map edge. Note that a great circle through the centre of an orthographic projection projects
+  to a straight line, so a centred country produces a starburst — that is correct geometry, not
+  a rendering bug. Rotate slightly to see the curves.
+- Zoom follows the selected country, so zooming in with Japan selected centres Japan.
+
 ## How much debt exists, and who holds it
 
 Cross-border holdings alone are misleading without a denominator, so the dashboard shows both.

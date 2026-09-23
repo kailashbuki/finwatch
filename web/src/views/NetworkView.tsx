@@ -12,9 +12,21 @@
  * across Asia instead of the Pacific.
  */
 
-import { geoCentroid, geoEqualEarth, geoInterpolate, geoPath } from 'd3-geo'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { geoCentroid, geoGraticule10, geoInterpolate, geoPath } from 'd3-geo'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { feature } from 'topojson-client'
+
+import {
+  INITIAL_VIEW,
+  type ViewState,
+  buildProjection,
+  clampPhi,
+  clampZoom,
+  dragToRotation,
+  rotationFor,
+  shortestDelta,
+  wrapLambda,
+} from '../lib/mapview'
 
 import {
   type CountryNetwork,
@@ -117,34 +129,13 @@ export default function NetworkView({ mode }: Props) {
 
   const [mapRef, box] = useMeasure<HTMLDivElement>()
 
-  /**
-   * Clip Antarctica out of the fitted extent. It carries no data, is hatched as "no data",
-   * and consumed roughly a sixth of the vertical space -- so excluding it lets the populated
-   * part of the world fill the panel instead of floating in a band of empty ice.
-   */
+  const [view, setView] = useState<ViewState>(INITIAL_VIEW)
   const projection = useMemo(
-    () =>
-      geoEqualEarth().fitExtent(
-        [
-          [6, 6],
-          [box.width - 6, box.height - 6],
-        ],
-        {
-          type: 'Polygon',
-          coordinates: [
-            [
-              [-180, 84],
-              [180, 84],
-              [180, -58],
-              [-180, -58],
-              [-180, 84],
-            ],
-          ],
-        } as never,
-      ),
-    [box],
+    () => buildProjection(view, box.width, box.height),
+    [view, box],
   )
   const path = useMemo(() => geoPath(projection), [projection])
+  const graticule = useMemo(() => geoGraticule10(), [])
 
   /**
    * Antarctica is dropped, not just excluded from the fit. It has no sovereign issuer, so it
@@ -226,6 +217,156 @@ export default function NetworkView({ mode }: Props) {
     [edges],
   )
 
+  // --- interaction: pan/zoom on the flat map, drag-to-rotate on the globe ---------------
+
+  const drag = useRef<{ x: number; y: number; pointer: number } | null>(null)
+  const animation = useRef<number | null>(null)
+  const [grabbing, setGrabbing] = useState(false)
+  /**
+   * Set once a pointer moves beyond a few pixels, so releasing after a pan or rotate does not
+   * also select whichever country happens to be under the cursor.
+   */
+  const moved = useRef(false)
+
+  const cancelAnimation = () => {
+    if (animation.current !== null) {
+      cancelAnimationFrame(animation.current)
+      animation.current = null
+    }
+  }
+
+  const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    cancelAnimation()
+    drag.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId }
+    moved.current = false
+    setGrabbing(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const onPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const start = drag.current
+    if (!start) return
+    const dx = event.clientX - start.x
+    const dy = event.clientY - start.y
+    if (Math.abs(dx) + Math.abs(dy) > 3) moved.current = true
+    drag.current = { ...start, x: event.clientX, y: event.clientY }
+
+    setView((v) => {
+      if (v.mode === 'globe') {
+        const { dLambda, dPhi } = dragToRotation(dx, dy, v.k)
+        return { ...v, lambda: wrapLambda(v.lambda + dLambda), phi: clampPhi(v.phi + dPhi) }
+      }
+      return { ...v, x: v.x + dx, y: v.y + dy }
+    })
+  }
+
+  const onPointerUp = (event: React.PointerEvent<SVGSVGElement>) => {
+    drag.current = null
+    setGrabbing(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const selectCountry = (id: string) => {
+    if (moved.current) return // the pointer was dragged, not clicked
+    setFocal((current) => (current === id ? null : id))
+  }
+
+  const onWheel = (event: React.WheelEvent<SVGSVGElement>) => {
+    event.preventDefault()
+    cancelAnimation()
+    const factor = Math.exp(-event.deltaY * 0.002)
+    setView((v) => {
+      const k = clampZoom(v.k * factor)
+      if (v.mode === 'globe') return { ...v, k }
+      // Keep the point under the cursor fixed while zooming the flat map.
+      const rect = event.currentTarget.getBoundingClientRect()
+      const px = event.clientX - rect.left
+      const py = event.clientY - rect.top
+      const ratio = k / v.k
+      return { ...v, k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio }
+    })
+  }
+
+  /**
+   * Projected position of the selected country in untransformed projection space, if any.
+   * Zoom is a group transform, so the on-screen position is `p * k + (x, y)`.
+   */
+  const focalPoint = useCallback((): [number, number] | null => {
+    const centre = focal && centroids.get(focal)
+    if (!centre) return null
+    const projected = projection(centre)
+    return projected ? [projected[0], projected[1]] : null
+  }, [focal, centroids, projection])
+
+  const zoomBy = (factor: number) =>
+    setView((v) => {
+      const k = clampZoom(v.k * factor)
+      if (v.mode === 'globe') return { ...v, k }
+
+      const cx = box.width / 2
+      const cy = box.height / 2
+      const point = focalPoint()
+      // With a country selected, zoom brings it to the centre -- otherwise zooming in with
+      // Japan selected walked off to Africa. With nothing selected, hold the centre fixed.
+      if (point) return { ...v, k, x: cx - point[0] * k, y: cy - point[1] * k }
+      const ratio = k / v.k
+      return { ...v, k, x: cx - (cx - v.x) * ratio, y: cy - (cy - v.y) * ratio }
+    })
+
+  const resetView = useCallback(() => {
+    cancelAnimation()
+    setView((v) => ({ ...INITIAL_VIEW, mode: v.mode }))
+  }, [])
+
+  const toggleMode = () =>
+    setView((v) => ({ ...INITIAL_VIEW, mode: v.mode === 'flat' ? 'globe' : 'flat' }))
+
+  /**
+   * On the globe, spin the focal country into view.
+   *
+   * Without this, selecting a country on the far side shows nothing at all -- its arcs are
+   * behind the horizon -- so this is a correctness requirement of globe mode, not polish.
+   */
+  useEffect(() => {
+    if (view.mode !== 'globe' || !focal) return
+    const centre = centroids.get(focal)
+    if (!centre) return
+
+    const target = rotationFor(centre)
+    cancelAnimation()
+    const from = { lambda: view.lambda, phi: view.phi }
+    const dLambda = shortestDelta(from.lambda, target.lambda)
+    const dPhi = target.phi - from.phi
+    if (Math.abs(dLambda) < 0.5 && Math.abs(dPhi) < 0.5) return
+
+    const started = performance.now()
+    const duration = 600
+    const step = (now: number) => {
+      const t = Math.min(1, (now - started) / duration)
+      // easeInOutCubic
+      const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2
+      setView((v) =>
+        v.mode === 'globe'
+          ? {
+              ...v,
+              lambda: wrapLambda(from.lambda + dLambda * e),
+              phi: clampPhi(from.phi + dPhi * e),
+            }
+          : v,
+      )
+      if (t < 1) animation.current = requestAnimationFrame(step)
+      else animation.current = null
+    }
+    animation.current = requestAnimationFrame(step)
+    return cancelAnimation
+    // Intentionally keyed on focal/mode only: including view would restart the tween each frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focal, view.mode, centroids])
+
+  useEffect(() => cancelAnimation, [])
+
   useEffect(() => {
     if (focal && network && liveRegion.current) {
       liveRegion.current.textContent =
@@ -299,11 +440,29 @@ export default function NetworkView({ mode }: Props) {
           }}
         >
           <div ref={mapRef} style={{ minHeight: 0, position: 'relative' }}>
+          <MapToolbar
+            mode={mode}
+            view={view}
+            onToggleMode={toggleMode}
+            onZoom={zoomBy}
+            onReset={resetView}
+          />
           <svg
             viewBox={`0 0 ${box.width} ${box.height}`}
-            style={{ width: '100%', height: '100%', display: 'block' }}
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'block',
+              cursor: grabbing ? 'grabbing' : 'grab',
+              touchAction: 'none',
+            }}
             role="img"
             aria-label="World map of net creditor and debtor positions"
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+            onWheel={onWheel}
           >
             <defs>
               {/*
@@ -324,7 +483,36 @@ export default function NetworkView({ mode }: Props) {
               </pattern>
             </defs>
 
-            <path d={path({ type: 'Sphere' }) ?? ''} fill="none" stroke={ink.grid} />
+            {/*
+              Flat mode zooms by transforming this group, which keeps coastlines crisp and is
+              far cheaper than reprojecting. Globe mode instead scales the projection itself,
+              so the horizon stays a true circle -- hence the identity transform there.
+            */}
+            <g
+              transform={
+                view.mode === 'flat'
+                  ? `translate(${view.x},${view.y}) scale(${view.k})`
+                  : undefined
+              }
+            >
+            {/* On the globe the sphere is a filled disc, giving the map an edge to read against. */}
+            <path
+              d={path({ type: 'Sphere' }) ?? ''}
+              // Ocean is kept clearly cooler and darker than the palest choropleth steps, so
+              // land still reads against sea where a country's net position is near zero.
+              fill={view.mode === 'globe' ? (mode === 'light' ? '#dde6f0' : '#0b1015') : 'none'}
+              stroke={ink.grid}
+              vectorEffect="non-scaling-stroke"
+            />
+            {view.mode === 'globe' && (
+              <path
+                d={path(graticule) ?? ''}
+                fill="none"
+                stroke={ink.grid}
+                strokeWidth={0.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
 
             {countries.map((f: any) => {
               const value = netByCountry.get(f.id)
@@ -340,9 +528,10 @@ export default function NetworkView({ mode }: Props) {
                   }
                   stroke={f.id === focal ? ink.textPrimary : ink.surface}
                   strokeWidth={f.id === focal ? 1.6 : 0.4}
+                  vectorEffect="non-scaling-stroke"
                   opacity={dim ? 0.25 : 1}
                   style={{ cursor: 'pointer', transition: 'opacity .15s' }}
-                  onClick={() => setFocal(f.id === focal ? null : f.id)}
+                  onClick={() => selectCountry(f.id)}
                   tabIndex={0}
                   role="button"
                   aria-label={`${f.properties?.name ?? f.id}: net position ${
@@ -367,12 +556,19 @@ export default function NetworkView({ mode }: Props) {
                 const w = arcWidth(e.usd, maxEdge)
                 return (
                   <g key={`${e.creditor}-${e.debtor}`}>
-                    <path d={d} stroke={ink.surface} strokeWidth={w + 2} opacity={0.7} />
+                    <path
+                      d={d}
+                      stroke={ink.surface}
+                      strokeWidth={w + 2}
+                      opacity={0.7}
+                      vectorEffect="non-scaling-stroke"
+                    />
                     <path
                       d={d}
                       stroke={roles[e.direction]}
                       strokeWidth={w}
                       opacity={0.85}
+                      vectorEffect="non-scaling-stroke"
                     >
                       <title>
                         {e.creditor} → {e.debtor}: {formatUSD(e.usd)} (all debt securities
@@ -385,6 +581,7 @@ export default function NetworkView({ mode }: Props) {
                   </g>
                 )
               })}
+            </g>
             </g>
           </svg>
           </div>
@@ -467,6 +664,91 @@ export default function NetworkView({ mode }: Props) {
       </div>
 
       <div ref={liveRegion} aria-live="polite" style={{ position: 'absolute', left: -9999 }} />
+    </div>
+  )
+}
+
+function MapToolbar({
+  mode,
+  view,
+  onToggleMode,
+  onZoom,
+  onReset,
+}: {
+  mode: Mode
+  view: ViewState
+  onToggleMode: () => void
+  onZoom: (factor: number) => void
+  onReset: () => void
+}) {
+  const ink = chrome[mode]
+  const button = {
+    background: ink.surface,
+    border: `1px solid ${ink.border}`,
+    color: ink.textSecondary,
+    borderRadius: 6,
+    width: 28,
+    height: 26,
+    fontSize: 13,
+    cursor: 'pointer',
+    display: 'grid',
+    placeItems: 'center',
+    lineHeight: 1,
+  } as const
+  const zoomed = view.k > 1.01 || view.x !== 0 || view.y !== 0
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        zIndex: 2,
+        display: 'grid',
+        gap: 4,
+        justifyItems: 'end',
+      }}
+    >
+      <button
+        onClick={onToggleMode}
+        style={{ ...button, width: 'auto', padding: '0 8px', fontSize: 11 }}
+        title={
+          view.mode === 'flat'
+            ? 'Switch to globe — great-circle flows are geometrically true on a sphere'
+            : 'Switch to flat map — shows every country at once'
+        }
+      >
+        {view.mode === 'flat' ? '◍ Globe' : '▭ Flat'}
+      </button>
+      <button onClick={() => onZoom(1.5)} style={button} title="Zoom in" aria-label="Zoom in">
+        +
+      </button>
+      <button onClick={() => onZoom(1 / 1.5)} style={button} title="Zoom out" aria-label="Zoom out">
+        −
+      </button>
+      <button
+        onClick={onReset}
+        style={{
+          ...button,
+          borderColor: zoomed || view.mode === 'globe' ? ink.axis : ink.border,
+        }}
+        title="Reset view"
+        aria-label="Reset view"
+      >
+        ⌂
+      </button>
+      <span
+        style={{
+          fontSize: 9.5,
+          color: ink.muted,
+          background: ink.surface,
+          padding: '1px 4px',
+          borderRadius: 4,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {view.k.toFixed(1)}×
+      </span>
     </div>
   )
 }
