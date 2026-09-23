@@ -110,7 +110,37 @@ export const loadNetworkIndex = () => getJSON<Record<string, NetworkIndexEntry>>
 export const loadRatesLatest = () => getJSON<RatePoint[]>('rates_latest.json')
 export const loadTopology = () => getJSON<any>('world.topo.json')
 
+/**
+ * Per-country vulnerability indicators. Note there is deliberately no score or probability:
+ * crisis timing depends on politics and liquidity that annual data cannot observe.
+ */
+export interface SustainabilityRow {
+  country: string
+  period: string
+  usd: number
+  foreign_share: number | null
+  gdp_usd: number | null
+  debt_pct_gdp: number | null
+  interest_pct_revenue: number | null
+  long_yield_pct: number | null
+  policy_rate_pct: number | null
+  nominal_growth_3y_pct: number | null
+  /** Long yield minus nominal GDP growth. Above zero, debt compounds faster than the economy. */
+  r_minus_g: number | null
+  reserve_cover: number | null
+  monetary_sovereignty: 'reserve_currency' | 'own_currency' | 'none'
+  flags: string[]
+}
+
+export interface Sustainability {
+  note: string
+  thresholds: Record<string, number>
+  rows: SustainabilityRow[]
+}
+
 export const loadDebtOutstanding = () => getJSON<DebtOutstanding>('debt_outstanding.json')
+export const loadSustainability = () =>
+  getJSON<Sustainability>('sustainability.json').catch(() => null)
 
 /** Optional: only the US has a full holder-class breakdown from a free source. */
 export const loadHoldersUSA = () =>

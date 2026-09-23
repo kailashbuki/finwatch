@@ -44,10 +44,13 @@ import {
   loadManifest,
   loadNetPositions,
   loadNetworkIndex,
+  loadSustainability,
   loadTopology,
+  type Sustainability,
 } from '../lib/data'
 import { type Mode, arcWidth, chrome, diverging, divergingColor, edgeRole, status } from '../lib/palette'
 import DebtStrip from './DebtStrip'
+import SustainabilityPanel from './Sustainability'
 
 /**
  * Measure a container so the map can fill the space actually available.
@@ -87,6 +90,19 @@ export default function NetworkView({ mode }: Props) {
   const ink = chrome[mode]
   const roles = edgeRole[mode]
 
+  /**
+   * Ocean and coastline tones.
+   *
+   * The ocean is deliberately a cool, desaturated blue-grey that is clearly distinct from the
+   * palest steps of BOTH diverging arms -- otherwise a country sitting near the neutral
+   * midpoint disappears into the sea. Coastlines are a mid tone rather than the surface colour,
+   * so borders stay visible over water as well as over land.
+   */
+  const ocean = mode === 'light' ? '#dbe4ee' : '#0a1017'
+  const coast = mode === 'light' ? 'rgba(70,90,115,.45)' : 'rgba(180,200,225,.30)'
+
+  const [hovered, setHovered] = useState<string | null>(null)
+
   const [topology, setTopology] = useState<any>(null)
   const [net, setNet] = useState<NetPosition[]>([])
   const [index, setIndex] = useState<Record<string, NetworkIndexEntry>>({})
@@ -96,7 +112,9 @@ export default function NetworkView({ mode }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [debt, setDebt] = useState<DebtOutstanding | null>(null)
   const [holders, setHolders] = useState<HolderBreakdown | null>(null)
+  const [sustain, setSustain] = useState<Sustainability | null>(null)
   const liveRegion = useRef<HTMLDivElement>(null)
+  const asideRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     Promise.all([loadTopology(), loadNetPositions(), loadNetworkIndex(), loadManifest()])
@@ -111,6 +129,7 @@ export default function NetworkView({ mode }: Props) {
     // Debt context loads independently: if BIS is unavailable the map still works.
     loadDebtOutstanding().then(setDebt).catch(() => setDebt(null))
     loadHoldersUSA().then(setHolders).catch(() => setHolders(null))
+    loadSustainability().then(setSustain).catch(() => setSustain(null))
   }, [])
 
   useEffect(() => {
@@ -237,6 +256,13 @@ export default function NetworkView({ mode }: Props) {
 
   const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
     cancelAnimation()
+    pinch.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (pinch.current.size >= 2) {
+      // Second finger down: abandon any drag so a pinch cannot also pan or rotate.
+      drag.current = null
+      pinchDistance.current = null
+      return
+    }
     drag.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId }
     moved.current = false
     setGrabbing(true)
@@ -244,6 +270,24 @@ export default function NetworkView({ mode }: Props) {
   }
 
   const onPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (pinch.current.has(event.pointerId)) {
+      pinch.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    }
+
+    // Touchscreen pinch: scale by the change in distance between two fingers.
+    if (pinch.current.size >= 2) {
+      const [a, b] = [...pinch.current.values()]
+      const distance = Math.hypot(a.x - b.x, a.y - b.y)
+      const previous = pinchDistance.current
+      pinchDistance.current = distance
+      moved.current = true
+      if (previous && previous > 0) {
+        const factor = distance / previous
+        setView((v) => ({ ...v, k: clampZoom(v.k * factor) }))
+      }
+      return
+    }
+
     const start = drag.current
     if (!start) return
     const dx = event.clientX - start.x
@@ -261,6 +305,8 @@ export default function NetworkView({ mode }: Props) {
   }
 
   const onPointerUp = (event: React.PointerEvent<SVGSVGElement>) => {
+    pinch.current.delete(event.pointerId)
+    if (pinch.current.size < 2) pinchDistance.current = null
     drag.current = null
     setGrabbing(false)
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -273,21 +319,52 @@ export default function NetworkView({ mode }: Props) {
     setFocal((current) => (current === id ? null : id))
   }
 
+  /**
+   * Wheel handling distinguishes trackpad pinch from trackpad scroll.
+   *
+   * Browsers deliver a pinch gesture as a `wheel` event with `ctrlKey` synthetically set, and
+   * two-finger scroll as a plain wheel event. Treating every wheel event as zoom (the previous
+   * behaviour) made a trackpad unusable: trying to scroll the map zoomed it instead.
+   *
+   * So: pinch (or ctrl/cmd + wheel) zooms; a plain two-finger scroll pans the flat map and
+   * rotates the globe, which is what the gesture means on each.
+   */
   const onWheel = (event: React.WheelEvent<SVGSVGElement>) => {
     event.preventDefault()
     cancelAnimation()
-    const factor = Math.exp(-event.deltaY * 0.002)
+
+    const isPinch = event.ctrlKey || event.metaKey
+    if (!isPinch) {
+      setView((v) => {
+        if (v.mode === 'globe') {
+          const { dLambda, dPhi } = dragToRotation(-event.deltaX, -event.deltaY, v.k)
+          return { ...v, lambda: wrapLambda(v.lambda + dLambda), phi: clampPhi(v.phi + dPhi) }
+        }
+        return { ...v, x: v.x - event.deltaX, y: v.y - event.deltaY }
+      })
+      return
+    }
+
+    // Pinch deltas are much finer-grained than notched mouse-wheel deltas.
+    const factor = Math.exp(-event.deltaY * 0.01)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const px = event.clientX - rect.left
+    const py = event.clientY - rect.top
     setView((v) => {
       const k = clampZoom(v.k * factor)
       if (v.mode === 'globe') return { ...v, k }
       // Keep the point under the cursor fixed while zooming the flat map.
-      const rect = event.currentTarget.getBoundingClientRect()
-      const px = event.clientX - rect.left
-      const py = event.clientY - rect.top
       const ratio = k / v.k
       return { ...v, k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio }
     })
   }
+
+  /**
+   * Two-finger pinch on a touchscreen, which sends pointer events rather than a wheel.
+   * Tracked separately from the single-pointer drag so a pinch never also pans or rotates.
+   */
+  const pinch = useRef<Map<number, { x: number; y: number }>>(new Map())
+  const pinchDistance = useRef<number | null>(null)
 
   /**
    * Projected position of the selected country in untransformed projection space, if any.
@@ -366,6 +443,12 @@ export default function NetworkView({ mode }: Props) {
   }, [focal, view.mode, centroids])
 
   useEffect(() => cancelAnimation, [])
+
+  // Selecting from the net-positions table (which sits at the bottom of the aside) scrolled
+  // the aside, leaving the focal panel off-screen. Bring it back into view on every selection.
+  useEffect(() => {
+    if (focal) asideRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [focal])
 
   useEffect(() => {
     if (focal && network && liveRegion.current) {
@@ -478,9 +561,79 @@ export default function NetworkView({ mode }: Props) {
                 patternTransform="rotate(45)"
                 patternUnits="userSpaceOnUse"
               >
-                <rect width="6" height="6" fill={ink.plane} />
-                <line x1="0" y1="0" x2="0" y2="6" stroke={ink.axis} strokeWidth="1.6" />
+                <rect width="6" height="6" fill={ocean} />
+                <line x1="0" y1="0" x2="0" y2="6" stroke={ink.axis} strokeWidth="1.4" />
               </pattern>
+
+              {/*
+                Limb darkening: a sphere lit from the upper left. This single gradient is what
+                makes the globe read as a solid body rather than a flat disc.
+              */}
+              {/*
+                Kept deliberately subtle. At higher opacity the highlight washed the choropleth
+                out entirely -- the shading sits on top of the land, so any strength here is paid
+                for directly in colour fidelity. Enough for depth, not enough to distort the data.
+              */}
+              <radialGradient id="globe-shade" cx="34%" cy="28%" r="80%">
+                <stop
+                  offset="0%"
+                  stopColor={mode === 'light' ? '#ffffff' : '#9fb4cc'}
+                  stopOpacity={mode === 'light' ? 0.28 : 0.14}
+                />
+                <stop offset="48%" stopColor={ocean} stopOpacity="0" />
+                <stop
+                  offset="100%"
+                  stopColor={mode === 'light' ? '#43556b' : '#000000'}
+                  stopOpacity={mode === 'light' ? 0.3 : 0.55}
+                />
+              </radialGradient>
+
+              {/* Soft outer shadow, so the globe sits above the panel rather than on it. */}
+              <filter id="globe-lift" x="-12%" y="-12%" width="124%" height="124%">
+                <feDropShadow
+                  dx="0"
+                  dy="5"
+                  stdDeviation="11"
+                  floodColor={mode === 'light' ? '#2c3a4c' : '#000000'}
+                  floodOpacity={mode === 'light' ? 0.22 : 0.6}
+                />
+              </filter>
+
+              {/* Focal country halo, so the selected country is findable at a glance. */}
+              <filter id="focal-glow" x="-60%" y="-60%" width="220%" height="220%">
+                <feDropShadow
+                  dx="0"
+                  dy="0"
+                  stdDeviation="4"
+                  floodColor={ink.textPrimary}
+                  floodOpacity="0.45"
+                />
+              </filter>
+
+              {/*
+                One gradient per arc, so flows fade at their origin and strengthen at their
+                destination. Direction is already carried by hue; this adds a second, redundant
+                cue that survives colour-vision deficiency and greyscale printing.
+              */}
+              {edges.map((e) => {
+                const from = projection(centroids.get(e.creditor)!)
+                const to = projection(centroids.get(e.debtor)!)
+                if (!from || !to) return null
+                return (
+                  <linearGradient
+                    key={`grad-${e.creditor}-${e.debtor}`}
+                    id={`arc-${e.creditor}-${e.debtor}`}
+                    gradientUnits="userSpaceOnUse"
+                    x1={from[0]}
+                    y1={from[1]}
+                    x2={to[0]}
+                    y2={to[1]}
+                  >
+                    <stop offset="0%" stopColor={roles[e.direction]} stopOpacity="0.22" />
+                    <stop offset="100%" stopColor={roles[e.direction]} stopOpacity="0.95" />
+                  </linearGradient>
+                )
+              })}
             </defs>
 
             {/*
@@ -495,24 +648,25 @@ export default function NetworkView({ mode }: Props) {
                   : undefined
               }
             >
-            {/* On the globe the sphere is a filled disc, giving the map an edge to read against. */}
+            {/*
+              Ocean is filled in BOTH modes now. Previously the flat map had no sea at all, so
+              land sat on bare panel and countries whose net position is near zero (a pale step)
+              were nearly invisible against it.
+            */}
             <path
               d={path({ type: 'Sphere' }) ?? ''}
-              // Ocean is kept clearly cooler and darker than the palest choropleth steps, so
-              // land still reads against sea where a country's net position is near zero.
-              fill={view.mode === 'globe' ? (mode === 'light' ? '#dde6f0' : '#0b1015') : 'none'}
+              fill={ocean}
+              stroke="none"
+              filter={view.mode === 'globe' ? 'url(#globe-lift)' : undefined}
+            />
+            <path
+              d={path(graticule) ?? ''}
+              fill="none"
               stroke={ink.grid}
+              strokeWidth={0.5}
+              opacity={view.mode === 'globe' ? 0.75 : 0.5}
               vectorEffect="non-scaling-stroke"
             />
-            {view.mode === 'globe' && (
-              <path
-                d={path(graticule) ?? ''}
-                fill="none"
-                stroke={ink.grid}
-                strokeWidth={0.5}
-                vectorEffect="non-scaling-stroke"
-              />
-            )}
 
             {countries.map((f: any) => {
               const value = netByCountry.get(f.id)
@@ -526,11 +680,20 @@ export default function NetworkView({ mode }: Props) {
                       ? 'url(#no-data)'
                       : divergingColor(value, maxAbsNet, mode)
                   }
-                  stroke={f.id === focal ? ink.textPrimary : ink.surface}
-                  strokeWidth={f.id === focal ? 1.6 : 0.4}
+                  stroke={
+                    f.id === focal
+                      ? ink.textPrimary
+                      : f.id === hovered
+                        ? ink.textSecondary
+                        : coast
+                  }
+                  strokeWidth={f.id === focal ? 1.8 : f.id === hovered ? 1.2 : 0.5}
                   vectorEffect="non-scaling-stroke"
-                  opacity={dim ? 0.25 : 1}
-                  style={{ cursor: 'pointer', transition: 'opacity .15s' }}
+                  filter={f.id === focal ? 'url(#focal-glow)' : undefined}
+                  opacity={dim ? 0.3 : 1}
+                  style={{ cursor: 'pointer', transition: 'opacity .15s, stroke-width .1s' }}
+                  onPointerEnter={() => setHovered(f.id)}
+                  onPointerLeave={() => setHovered((h) => (h === f.id ? null : h))}
                   onClick={() => selectCountry(f.id)}
                   tabIndex={0}
                   role="button"
@@ -565,9 +728,8 @@ export default function NetworkView({ mode }: Props) {
                     />
                     <path
                       d={d}
-                      stroke={roles[e.direction]}
+                      stroke={`url(#arc-${e.creditor}-${e.debtor})`}
                       strokeWidth={w}
-                      opacity={0.85}
                       vectorEffect="non-scaling-stroke"
                     >
                       <title>
@@ -582,6 +744,21 @@ export default function NetworkView({ mode }: Props) {
                 )
               })}
             </g>
+
+            {/*
+              Shading goes on TOP of the geography, not under it -- limb darkening has to affect
+              the land as well as the sea or the continents look pasted onto the sphere.
+              pointer-events none so it never intercepts a country click.
+            */}
+            {view.mode === 'globe' && (
+              <path
+                d={path({ type: 'Sphere' }) ?? ''}
+                fill="url(#globe-shade)"
+                stroke={mode === 'light' ? 'rgba(60,80,105,.35)' : 'rgba(255,255,255,.14)'}
+                strokeWidth={1}
+                style={{ pointerEvents: 'none' }}
+              />
+            )}
             </g>
           </svg>
           </div>
@@ -607,6 +784,7 @@ export default function NetworkView({ mode }: Props) {
         </div>
 
         <aside
+          ref={asideRef}
           style={{
             display: 'grid',
             gap: 10,
@@ -654,6 +832,13 @@ export default function NetworkView({ mode }: Props) {
               </>
             )}
           </Panel>
+
+          <SustainabilityPanel
+            mode={mode}
+            data={sustain}
+            focal={focal}
+            onSelect={setFocal}
+          />
 
           {offMap.length > 0 && <OffMapPanel mode={mode} rows={offMap} onSelect={setFocal} />}
 

@@ -147,3 +147,36 @@ uv run ruff check ingest/    # lint
 
 Connector tests must run **offline** against fixtures in `ingest/tests/fixtures/`, so they catch
 parser regressions and schema drift without depending on upstream availability.
+
+## Sustainability indicators (added)
+
+`ingest/sustainability.py` computes debt/GDP, interest/revenue, **r − g**, reserve cover and
+monetary sovereignty. Two rules:
+
+- **`r − g` uses local-currency nominal growth**, never USD. `r` is a nominal local-currency
+  rate; using USD growth injects exchange-rate moves into a domestic compounding condition and
+  makes any depreciating currency look like it has negative nominal growth.
+- **Never emit an aggregate crisis score.** Crisis timing turns on politics and liquidity that
+  annual data cannot observe. Thresholds in `FLAGS` are conventional reference points; Japan
+  breaches nearly all of them and has been stable for decades, which is the whole point.
+
+Ranked output sorts by `r − g`, not debt level, because sorting by debt puts Japan (179% of GDP,
+stable) top and buries South Africa (+4.1pp) and Brazil (30% of revenue on interest).
+
+**World Bank**: latest non-null value **per indicator**, not the latest row per country.
+Coverage differs sharply (GDP 247 economies, interest/revenue 105), so a single "latest row"
+silently dropped every indicator missing in that year.
+
+**OECD** rejects `Accept: ...;version=1.0.0` with HTTP 406 (Bundesbank *requires* it) and serves
+GenericData XML for `*/*`. It also uses **SDMX-JSON 2.0** (`data.structures`, a list) where BIS
+uses 1.0 (`data.structure`); `sdmx.json_to_frame` handles both. Its v4.0 history is only ~8
+months deep, so long-yield history must come from national curves.
+
+## Map interaction contract
+
+- **Pinch = wheel + ctrlKey** (browsers set this synthetically). Plain wheel is a two-finger
+  scroll and must pan/rotate, not zoom — treating every wheel event as zoom made trackpads
+  unusable.
+- Globe shading sits **on top of** the geography, so any opacity there is paid for in colour
+  fidelity. Keep it subtle; at 0.95 it washed the choropleth out entirely.
+- A pointer that moves >3px must not select a country on release, or panning reselects.
