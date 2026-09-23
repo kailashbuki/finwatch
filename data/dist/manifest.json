@@ -1,38 +1,67 @@
 {
-  "generated_at": "2026-09-23T18:01:21+00:00",
+  "generated_at": "2026-09-23T18:36:36+00:00",
   "tier": "all",
   "sources": {
     "bis_cbpol": {
       "status": "ok",
       "rows": 296048,
       "as_of": "2026-09-15",
-      "fetched_at": "2026-09-23T17:58:40+00:00",
-      "duration_s": 7.2,
+      "fetched_at": "2026-09-23T18:36:31+00:00",
+      "duration_s": 2.3,
       "tier": "daily"
     },
     "ust_curve": {
       "status": "ok",
       "rows": 21565,
       "as_of": "2026-09-22",
-      "fetched_at": "2026-09-23T18:00:44+00:00",
-      "duration_s": 123.7,
+      "fetched_at": "2026-09-23T18:36:31+00:00",
+      "duration_s": 0.1,
       "tier": "daily"
     },
     "jgb_curve": {
       "status": "ok",
       "rows": 163567,
       "as_of": "2026-08-31",
-      "fetched_at": "2026-09-23T18:00:47+00:00",
-      "duration_s": 2.7,
+      "fetched_at": "2026-09-23T18:36:32+00:00",
+      "duration_s": 0.3,
+      "tier": "daily"
+    },
+    "ust_debt": {
+      "status": "ok",
+      "rows": 400,
+      "as_of": "2026-09-21",
+      "fetched_at": "2026-09-23T18:36:32+00:00",
+      "duration_s": 0.0,
       "tier": "daily"
     },
     "imf_pip": {
       "status": "ok",
       "rows": 373750,
       "as_of": "2024",
-      "fetched_at": "2026-09-23T18:01:18+00:00",
-      "duration_s": 31.1,
+      "fetched_at": "2026-09-23T18:36:33+00:00",
+      "duration_s": 1.6,
       "tier": "monthly"
+    },
+    "bis_debtsec": {
+      "status": "ok",
+      "rows": 1821,
+      "as_of": "2026-Q1",
+      "fetched_at": "2026-09-23T18:36:34+00:00",
+      "duration_s": 0.9,
+      "tier": "monthly"
+    },
+    "ust_ownership": {
+      "status": "ok",
+      "rows": 784,
+      "as_of": "2026-06-30",
+      "fetched_at": "2026-09-23T18:36:34+00:00",
+      "duration_s": 0.0,
+      "tier": "monthly"
+    },
+    "world_geo": {
+      "status": "ok",
+      "bytes": 107527,
+      "tier": "static"
     }
   }
 }

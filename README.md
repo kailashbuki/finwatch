@@ -109,11 +109,37 @@ of third-party series, and OECD SDMX serves the same data with no key),
 and **AidData / Horn–Reinhart–Trebesch** China-lending datasets (excellent, but no explicit
 open license — pending a decision).
 
+## How much debt exists, and who holds it
+
+Cross-border holdings alone are misleading without a denominator, so the dashboard shows both.
+For the US (all verified live):
+
+| | |
+|---|---|
+| Total public debt | **$40.11T** |
+| — held by the public / intragovernmental | $32.40T / $7.71T |
+| Govt debt securities (marketable, BIS) | $34.23T |
+| — held by non-residents | $9.42T (27.5%) |
+
+…plus every holder category from Treasury OFS-2: central bank and government accounts 30.8%,
+foreign and international 23.9%, other investors 17.5%, mutual funds 13.1%, banks 5.6%, state
+and local government 4.2%, pension funds 3.0%, insurance 1.5%, savings bonds 0.4%.
+
+BIS gives total and non-resident-held government debt securities for **45 areas**, so the
+foreign share is available cross-country — Japan 12.1%, US 27.5%, Germany 52.9%, Belgium 60.9%.
+
+**Drill-down stops at sector level, by necessity.** No free official source identifies
+individual institutions or hedge funds. Hedge funds fall inside Treasury's residual "Other
+investors" (17.5%) and are never broken out; 13F filings cover US-listed equities, not sovereign
+bonds. Anything finer needs a commercial feed.
+
 ## Status
 
-Working: IMF PIP bilateral holdings, BIS policy rates (49 areas), US and Japan full yield
-curves, the focal flow map with ranked panel, scheduled refresh and deploy.
+Working: IMF PIP bilateral holdings, BIS policy rates (49 areas), BIS government debt
+outstanding and foreign share (45 areas), Treasury debt totals and full holder breakdown, US and
+Japan yield curves, the focal flow map with ranked panel and debt panel, scheduled refresh and deploy.
 
-Not yet wired: OECD 10Y cross-section, ECB (`IRS`/`YC`/`FM`), Bundesbank, BoE, BIS debt
-securities, TIC/CSLT, World Bank IDS, BIS CBS; the rates and per-country views; the chord view.
-See `CLAUDE.md` for the endpoints, all verified live.
+Not yet wired: OECD 10Y cross-section, ECB (`IRS`/`YC`/`FM`), Bundesbank, BoE, TIC/CSLT, World
+Bank IDS, BIS CBS; per-country holder sectors from PIP's `SECTOR` dimension (which would extend
+the holder breakdown beyond the US); the rates and per-country views; the chord view. See
+`CLAUDE.md` for the endpoints, all verified live.

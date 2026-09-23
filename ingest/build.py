@@ -21,7 +21,15 @@ from pathlib import Path
 import pandas as pd
 
 from ingest import normalize
-from ingest.sources import bis_cbpol, imf_pip, jgb_curve, ust_curve, world_geo
+from ingest.sources import (
+    bis_cbpol,
+    bis_debtsec,
+    imf_pip,
+    jgb_curve,
+    ust_curve,
+    ust_ownership,
+    world_geo,
+)
 
 log = logging.getLogger(__name__)
 
@@ -45,29 +53,78 @@ def _sources() -> list[Source]:
         Source("bis_cbpol", "daily", "rates", lambda: bis_cbpol.fetch_policy_rates()),
         Source("ust_curve", "daily", "rates", lambda: ust_curve.fetch_curve(years=UST_YEARS)),
         Source("jgb_curve", "daily", "rates", lambda: jgb_curve.fetch_curve()),
+        Source("ust_debt", "daily", "debt_totals", lambda: ust_ownership.fetch_debt_totals()),
         Source(
             "imf_pip",
             "monthly",
             "holdings",
             lambda: imf_pip.fetch_bilateral(start=PIP_START),
         ),
+        Source(
+            "bis_debtsec",
+            "monthly",
+            "debt_outstanding",
+            lambda: bis_debtsec.foreign_share(start="2015"),
+        ),
+        Source(
+            "ust_ownership",
+            "monthly",
+            "holders_by_class",
+            lambda: ust_ownership.fetch_ownership(),
+        ),
     ]
 
 
 def resolve_edges(holdings: pd.DataFrame) -> pd.DataFrame:
-    """Apply the hybrid edge rule: one row per (creditor, debtor, period).
+    """One row per (creditor, debtor, period), carrying **both** measurement bases.
 
-    Prefers the government-issuer figure where the reporter provides it, and falls back to
-    the all-debt-securities total otherwise. The surviving row keeps ``instrument`` so the
-    UI can label what each edge actually measures -- an ``all_debt`` edge must never be
-    presented as a government-bond number.
+    An earlier version collapsed the two into a single ``usd`` column, preferring the
+    government figure where available. That was wrong in a way worth recording: the
+    resulting column mixed government-only values (28 reporters) with all-debt values
+    (the rest), so **any total over it summed apples and oranges** -- the UI showed
+    $8.99T for foreign holdings of US debt where the coherent all-debt figure is $10.00T.
+
+    So `usd_all_debt` (reported by every reporter) is the comparable basis used for
+    thickness, ranking and totals, and `usd_government` is an optional extra detail
+    shown alongside it. Neither is ever silently substituted for the other.
     """
-    relevant = holdings[holdings["issuer_sector"].isin(["S1", "S13"])].copy()
-    # government (S13) sorts before all_debt (S1) so the first row per group wins.
-    relevant["_rank"] = (relevant["instrument"] != "government").astype(int)
-    relevant = relevant.sort_values("_rank")
-    deduped = relevant.drop_duplicates(subset=["creditor", "debtor", "period"], keep="first")
-    return deduped.drop(columns=["_rank", "issuer_sector", "holder_sector"], errors="ignore")
+    keys = ["creditor", "debtor", "period"]
+    all_debt = (
+        holdings[holdings["issuer_sector"] == "S1"][[*keys, "usd"]]
+        .rename(columns={"usd": "usd_all_debt"})
+        .drop_duplicates(subset=keys)
+    )
+    government = (
+        holdings[holdings["issuer_sector"] == "S13"][[*keys, "usd"]]
+        .rename(columns={"usd": "usd_government"})
+        .drop_duplicates(subset=keys)
+    )
+    merged = all_debt.merge(government, on=keys, how="outer")
+
+    # Comparable basis. all_debt is near-universally reported; fall back only if absent.
+    merged["usd"] = merged["usd_all_debt"].fillna(merged["usd_government"])
+    merged["basis"] = merged["usd_all_debt"].notna().map(
+        {True: "all_debt", False: "government"}
+    )
+    merged["has_government"] = merged["usd_government"].notna()
+    merged["source"] = "imf_pip"
+    return merged.dropna(subset=["usd"]).reset_index(drop=True)
+
+
+def unattributed_by_debtor(holdings: pd.DataFrame, period: str) -> pd.Series:
+    """Holdings of each debtor that no single country can be credited with.
+
+    Dominated by ``TX093`` (SEFER + SSIO): foreign-exchange reserve managers and
+    international organisations. For the US this is **$2.31T** -- real foreign financing
+    that a bilateral map structurally cannot place, so it must be reported as its own
+    line rather than dropped, which is what an earlier version did.
+    """
+    current = holdings[
+        (holdings["issuer_sector"] == "S1") & (holdings["period"] == period)
+    ]
+    aggregates = current[current["creditor"].map(normalize.is_aggregate)]
+    real_debtors = aggregates[~aggregates["debtor"].map(normalize.is_aggregate)]
+    return real_debtors.groupby("debtor")["usd"].sum()
 
 
 def _write(name: str, payload: object) -> int:
@@ -167,6 +224,9 @@ def _emit_holdings(holdings: pd.DataFrame) -> None:
     current = edges[edges["period"] == latest].copy()
     previous = edges[edges["period"] < latest]
 
+    # Unattributable foreign holdings, reported per debtor so totals can be honest.
+    unattributed = unattributed_by_debtor(holdings, latest)
+
     _write("net_positions", _records(normalize.net_positions(current)))
 
     # One file per focal country: its inbound and outbound edges, ranked, with deltas.
@@ -185,12 +245,25 @@ def _emit_holdings(holdings: pd.DataFrame) -> None:
             keys = list(zip(frame["creditor"], frame["debtor"], strict=False))
             frame["prev_usd"] = [prior.get(k) for k in keys]
             frame.sort_values("usd", ascending=False, inplace=True)
-        cols = ["creditor", "debtor", "usd", "prev_usd", "instrument", "conduit", "source"]
+        cols = [
+            "creditor",
+            "debtor",
+            "usd",
+            "usd_government",
+            "prev_usd",
+            "basis",
+            "has_government",
+            "conduit",
+            "source",
+        ]
         _write(
             f"network/{country}",
             {
                 "country": country,
                 "period": latest,
+                # Foreign holdings that no single country can be credited with, chiefly
+                # reserve managers (SEFER) and international organisations (SSIO).
+                "unattributed_held_by": float(unattributed.get(country, 0.0)),
                 "holds": _records(holds[cols]),
                 "held_by": _records(held_by[cols]),
             },
@@ -198,18 +271,85 @@ def _emit_holdings(holdings: pd.DataFrame) -> None:
         index[country] = {
             "holds": int(len(holds)),
             "held_by": int(len(held_by)),
+            # Totals are on the all-debt basis only, so they are coherent to sum.
             "total_holds": float(holds["usd"].sum()),
             "total_held_by": float(held_by["usd"].sum()),
+            "unattributed_held_by": float(unattributed.get(country, 0.0)),
             "conduit": normalize.is_conduit(country),
-            # True only if every edge is government-specific; mixed definitions must be visible.
-            "government_only": bool(len(holds))
-            and bool((holds["instrument"] == "government").all()),
+            # Share of this country's outbound edges that carry government-issuer detail.
+            "government_detail": (
+                float(holds["has_government"].mean()) if len(holds) else 0.0
+            ),
         }
     _write("network_index", index)
     _write("periods", sorted(edges["period"].unique().tolist()))
     log.info(
         "wrote net_positions.json, %d per-country network files (period %s)", len(index), latest
     )
+
+
+def _emit_debt(tables: dict[str, pd.DataFrame]) -> None:
+    """Write the debt-outstanding artifacts: the denominator plus holder breakdowns.
+
+    This is what lets the site state *how much debt exists* rather than only who holds the
+    cross-border slice. Without it a $10T foreign-holdings figure sat with no context and
+    invited comparison against the ~$40T total public debt headline -- a different measure.
+    """
+    outstanding = tables.get("debt_outstanding")
+    if outstanding is not None and not outstanding.empty:
+        frame = outstanding.copy()
+        frame["country"] = normalize.bis_to_alpha3(frame["country"], strict=False)
+        frame = frame.dropna(subset=["country"])
+
+        latest = frame["period"].max()
+        current = frame[frame["period"] == latest]
+        _write(
+            "debt_outstanding",
+            {
+                "period": latest,
+                "note": (
+                    "General government debt securities outstanding (BIS). Marketable "
+                    "securities only, so below headline gross debt, which also includes "
+                    "non-marketable and intragovernmental instruments. The foreign-held "
+                    "cut is market-valued while the total is nominal, so the share is "
+                    "approximate."
+                ),
+                "rows": _records(
+                    current[["country", "usd", "foreign_usd", "foreign_share"]]
+                ),
+            },
+        )
+        # Per-country history for the drill-down.
+        for country, group in frame.groupby("country"):
+            _write(
+                f"debt/{country}",
+                _columnar(
+                    group.sort_values("period"),
+                    ["period", "usd", "foreign_usd", "foreign_share"],
+                ),
+            )
+        log.info(
+            "wrote debt_outstanding.json (%d countries, %s) and per-country history",
+            current["country"].nunique(),
+            latest,
+        )
+
+    totals = tables.get("debt_totals")
+    if totals is not None and not totals.empty:
+        recent = totals.tail(400)
+        _write("debt_totals_usa", _columnar(recent, ["date", "total", "held_by_public",
+                                                     "intragovernmental"]))
+
+    ownership = tables.get("holders_by_class")
+    if ownership is not None and not ownership.empty:
+        breakdown = ust_ownership.holder_breakdown(ownership)
+        _write("holders_usa", breakdown)
+        log.info(
+            "wrote holders_usa.json: total %.2fT across %d categories (%s)",
+            breakdown["total"] / 1e12,
+            len(breakdown["categories"]),
+            breakdown["period"],
+        )
 
 
 def build(tier: str = "all") -> dict:
@@ -222,6 +362,7 @@ def build(tier: str = "all") -> dict:
     manifest: dict[str, dict] = {}
     rates: list[pd.DataFrame] = []
     holdings: pd.DataFrame | None = None
+    tables: dict[str, pd.DataFrame] = {}
 
     for source in _sources():
         if tier != "all" and source.tier != tier:
@@ -245,6 +386,8 @@ def build(tier: str = "all") -> dict:
             rates.append(frame)
         elif source.table == "holdings":
             holdings = frame
+        else:
+            tables[source.table] = frame
 
         as_of = None
         for column in ("date", "period"):
@@ -267,6 +410,8 @@ def build(tier: str = "all") -> dict:
 
     if holdings is not None and not holdings.empty:
         _emit_holdings(holdings)
+
+    _emit_debt(tables)
 
     # Map geometry rarely changes, so emit it whenever it is missing rather than per tier.
     if not (DIST / "world.topo.json").exists():

@@ -69,6 +69,16 @@ export const diverging = {
 
 export const MIDPOINT = 7
 
+/**
+ * Sequential ramp for magnitude (debt outstanding, holdings size). One hue, light -> dark.
+ * Never a rainbow, and never used where the value has a meaningful zero-crossing -- that is
+ * the diverging ramp's job.
+ */
+export const sequential = {
+  light: ['#cde2fb', '#b7d3f6', '#9ec5f4', '#86b6ef', '#6da7ec', '#5598e7', '#3987e5', '#2a78d6', '#1c5cab'],
+  dark: ['#104281', '#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7', '#6da7ec', '#86b6ef'],
+} as const
+
 /** Status colours are reserved and never reused as a series hue. */
 export const status = {
   good: '#0ca30c',

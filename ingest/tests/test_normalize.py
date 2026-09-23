@@ -57,9 +57,22 @@ def test_bis_alpha2_maps_to_alpha3():
     assert list(got) == ["USA", "JPN", "GBR", "DEU", "XM"]
 
 
-def test_bis_mapping_covers_every_area_the_api_serves():
-    """All 49 areas in WS_CBPOL must map; a new one should fail loudly, not vanish."""
-    assert len(normalize.BIS_AREA_TO_ALPHA3) == 49
+def test_bis_mapping_covers_both_bis_datasets():
+    """49 policy-rate areas plus 13 more that appear only in debt securities.
+
+    A newly added BIS area should fail loudly in `bis_to_alpha3` rather than vanish, which
+    is why the mapping is explicit rather than derived from a library.
+    """
+    assert len(normalize.BIS_AREA_TO_ALPHA3) == 62
+    # Areas that exist only in the debt securities dataset.
+    for code in ("BG", "CY", "EE", "FI", "IE", "LT", "LU", "LV", "MT", "SG", "SI", "SK"):
+        assert code in normalize.BIS_AREA_TO_ALPHA3
+
+
+def test_both_bis_euro_area_codes_are_aggregates():
+    """BIS uses XM in policy rates and U2 in debt securities for the same euro area."""
+    assert normalize.is_aggregate("XM")
+    assert normalize.is_aggregate("U2")
 
 
 def test_unmapped_bis_code_raises_by_default():

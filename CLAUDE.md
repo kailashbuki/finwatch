@@ -28,18 +28,27 @@ ISO **alpha-3** codes are the join key everywhere. Four long-format tables: `hol
 pseudo-economies) live in an explicit `aggregates` list and must never be summed alongside real
 economies or drawn on the map.
 
-## The hybrid edge rule (decided, not provisional)
+## Edges carry BOTH measurement bases — never collapse them
 
-No single source gives both broad coverage and government-only precision, so each `holdings` edge
-carries `instrument` (`government` | `all_debt`) and `source`, and the UI labels them differently:
+Each `holdings` edge has:
 
-| Pair | Source | `instrument` |
-|---|---|---|
-| any → USA | TIC/CSLT | `government` (Treasuries, monthly) |
-| 28 PIP reporters → any | PIP `COUNTERPART_SECTOR=S13` | `government` |
-| all other pairs | PIP `COUNTERPART_SECTOR=S1` | `all_debt` |
+- `usd` — **all debt securities** (government + corporate + bank), PIP `COUNTERPART_SECTOR=S1`.
+  Reported by essentially every reporter, so this is the comparable basis for width, ranking
+  and **totals**.
+- `usd_government` — the government-only subset, PIP `COUNTERPART_SECTOR=S13`. Available for
+  only **28 of 85** reporters (not Japan, China, the UK, Luxembourg, Switzerland).
 
-Never present an `all_debt` edge as a government-bond figure. The legend must distinguish them.
+**Do not collapse these into one column.** An earlier version preferred `government` where
+available and fell back to `all_debt`, which made any total a sum of apples and oranges: the UI
+showed $8.99T for foreign holdings of US debt where the coherent all-debt figure is $10.00T.
+
+## Never drop the unattributable bucket
+
+PIP's `TX093` (SEFER + SSIO) holds foreign-exchange reserve managers' and international
+organisations' holdings, which cannot be attributed to any one country. For the US that is
+**$2.31T** — real foreign financing. Excluding aggregates is correct for a *bilateral map*, but
+the total must add it back, so `network/<country>.json` carries `unattributed_held_by` and the
+UI shows it as its own row. Total foreign holdings of US debt securities = $10.00T + $2.31T.
 
 ## Per-upstream gotchas (all verified live, 2026-09-23)
 
@@ -56,6 +65,32 @@ The critical ones:
   Luxembourg and Switzerland do not. Derive the list with `government_issuer_reporters()`.
 - `ACCOUNTING_ENTRY=L` exists only for derived `*_SCC_*` indicators at total-economy level, so PIP
   **cannot** answer "who holds country X's government bonds" from the debtor side.
+
+**Different quantities that must never be conflated.** All verified live:
+
+| Quantity | Value | Source |
+|---|---|---|
+| US total public debt | $40.11T | Treasury Debt to the Penny |
+| — held by the public / intragovernmental | $32.40T / $7.71T | same |
+| US govt **debt securities** (marketable) | $34.23T | BIS `WS_NA_SEC_DSS` |
+| Foreign holdings of US **Treasuries** | $9.36T | Treasury OFS-2 |
+| Non-resident held US govt debt securities | $9.42T | BIS, `COUNTERPART_AREA=5Z` |
+| Foreign holdings of **all** US debt securities | $12.31T | IMF PIP (incl. $2.31T unattributable) |
+
+The three foreign figures agreeing across independent collections ($9.36T / $9.42T / $10.00T
+attributable) is the strongest correctness signal available; use it as a regression check.
+
+**Treasury Fiscal Data OFS-2** — `record_date` is the **publication** date and several
+observation periods share one; the real observation date is `end_of_month`. Grouping by
+`record_date` silently mixes quarters and produced a $30.6T total instead of $39.1T. Also, the
+newest published quarter has totals filled but detail `null` — use `latest_complete_period()`.
+
+**BIS `WS_NA_SEC_DSS`** — 18 dimensions (17 dots). Under-pinning returns several different
+numbers for the same country/period. Must pin `STO=LE` (stocks, not flows `F`), `MATURITY=T`,
+`CURRENCY_DENOM=_T`, `CUST_BREAKDOWN=_T`, `CONSOLIDATION=N`. `COUNTERPART_AREA` is `XW` for all
+holders and `5Z` for non-residents — that pair gives the foreign-held share for 45 areas. BIS
+uses `U2` for the euro area here and `XM` in policy rates; both are aggregates and `U2` must be
+excluded from country rankings or it double-counts France, Germany, Italy and Spain.
 
 **BIS** and **Bundesbank** — return SDMX-ML XML unless you send
 `Accept: application/vnd.sdmx.data+json`; Bundesbank needs `;version=1.0.0` or answers **HTTP 406**.

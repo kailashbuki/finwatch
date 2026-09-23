@@ -27,8 +27,12 @@ BIS_AREA_TO_ALPHA3: dict[str, str] = {
     "MX": "MEX", "MY": "MYS", "NL": "NLD", "NO": "NOR", "NZ": "NZL", "PE": "PER",
     "PH": "PHL", "PL": "POL", "PT": "PRT", "RO": "ROU", "RS": "SRB", "RU": "RUS",
     "SA": "SAU", "SE": "SWE", "TH": "THA", "TR": "TUR", "US": "USA", "ZA": "ZAF",
-    # Not a country: the euro area as a currency union. Preserved as an aggregate.
+    # Additional areas that appear in the BIS debt securities dataset but not in policy rates.
+    "BG": "BGR", "CY": "CYP", "EE": "EST", "FI": "FIN", "IE": "IRL", "LT": "LTU",
+    "LU": "LUX", "LV": "LVA", "MT": "MLT", "SG": "SGP", "SI": "SVN", "SK": "SVK",
+    # Not countries: the euro area under two different BIS codes. Preserved as aggregates.
     "XM": "XM",
+    "U2": "U2",
 }
 
 #: Codes that are not sovereign states. Never drawn on the map, never summed with countries.
@@ -40,7 +44,8 @@ BIS_AREA_TO_ALPHA3: dict[str, str] = {
 #: that *look* like alpha-3 but are not current sovereign states.
 AGGREGATES: frozenset[str] = frozenset(
     {
-        "XM",  # BIS: euro area
+        "XM",  # BIS: euro area (policy rates)
+        "U2",  # BIS: euro area (debt securities)
         "EA20",  # OECD: euro area (20 members)
         "EA19",
         "EU27_2020",

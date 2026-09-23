@@ -24,14 +24,23 @@ export interface NetPosition {
   net: number
 }
 
-/** One bilateral edge. `instrument` records what it actually measures -- see the hybrid rule. */
+/**
+ * One bilateral edge, carrying both measurement bases.
+ *
+ * `usd` is the comparable basis (all debt securities: government + corporate + bank) and is
+ * reported by essentially every reporter, so it is safe to rank and total.
+ * `usd_government` is the government-only subset, available for just 28 of 85 reporters.
+ * The two are never substituted for one another -- mixing them into one column produced a
+ * total that summed apples and oranges.
+ */
 export interface Edge {
   creditor: string
   debtor: string
   usd: number
+  usd_government: number | null
   prev_usd: number | null
-  /** `government` = sovereign bonds only. `all_debt` = government + corporate + bank. */
-  instrument: 'government' | 'all_debt'
+  basis: 'all_debt' | 'government'
+  has_government: boolean
   conduit: boolean
   source: string
 }
@@ -39,6 +48,8 @@ export interface Edge {
 export interface CountryNetwork {
   country: string
   period: string
+  /** Foreign holdings no single country can be credited with: reserve managers, intl. orgs. */
+  unattributed_held_by: number
   holds: Edge[]
   held_by: Edge[]
 }
@@ -46,10 +57,13 @@ export interface CountryNetwork {
 export interface NetworkIndexEntry {
   holds: number
   held_by: number
+  /** Totals are on the all-debt basis only, so they are coherent to sum. */
   total_holds: number
   total_held_by: number
+  unattributed_held_by: number
   conduit: boolean
-  government_only: boolean
+  /** Fraction of this country's outbound edges that carry government-issuer detail (0..1). */
+  government_detail: number
 }
 
 export interface RatePoint {
@@ -58,6 +72,30 @@ export interface RatePoint {
   tenor_months: number | null
   pct: number
   date: string
+}
+
+/** General government debt securities outstanding, and how much of it is foreign-held. */
+export interface DebtRow {
+  country: string
+  usd: number
+  foreign_usd: number | null
+  foreign_share: number | null
+}
+
+export interface DebtOutstanding {
+  period: string
+  note: string
+  rows: DebtRow[]
+}
+
+/** Holder categories for US Treasury securities (Treasury OFS-2). */
+export interface HolderBreakdown {
+  country: string
+  period: string
+  total: number
+  federal_and_government_accounts: number
+  privately_held: number
+  categories: { group: string; usd: number; share: number }[]
 }
 
 async function getJSON<T>(path: string): Promise<T> {
@@ -71,6 +109,12 @@ export const loadNetPositions = () => getJSON<NetPosition[]>('net_positions.json
 export const loadNetworkIndex = () => getJSON<Record<string, NetworkIndexEntry>>('network_index.json')
 export const loadRatesLatest = () => getJSON<RatePoint[]>('rates_latest.json')
 export const loadTopology = () => getJSON<any>('world.topo.json')
+
+export const loadDebtOutstanding = () => getJSON<DebtOutstanding>('debt_outstanding.json')
+
+/** Optional: only the US has a full holder-class breakdown from a free source. */
+export const loadHoldersUSA = () =>
+  getJSON<HolderBreakdown>('holders_usa.json').catch(() => null)
 
 const networkCache = new Map<string, Promise<CountryNetwork>>()
 

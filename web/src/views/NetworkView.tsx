@@ -18,22 +18,46 @@ import { feature } from 'topojson-client'
 
 import {
   type CountryNetwork,
+  type DebtOutstanding,
   type Edge,
+  type HolderBreakdown,
   type Manifest,
   type NetPosition,
   type NetworkIndexEntry,
   formatDelta,
   formatUSD,
   loadCountryNetwork,
+  loadDebtOutstanding,
+  loadHoldersUSA,
   loadManifest,
   loadNetPositions,
   loadNetworkIndex,
   loadTopology,
 } from '../lib/data'
 import { type Mode, arcWidth, chrome, diverging, divergingColor, edgeRole, status } from '../lib/palette'
+import DebtStrip from './DebtStrip'
 
-const WIDTH = 960
-const HEIGHT = 480
+/**
+ * Measure a container so the map can fill the space actually available.
+ *
+ * A fixed viewBox left the map in a 2:1 box with dead space below it on any taller window.
+ * The projection is refitted to the measured box instead.
+ */
+function useMeasure<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null)
+  const [box, setBox] = useState({ width: 960, height: 480 })
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      if (width > 40 && height > 40) setBox({ width, height })
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  return [ref, box] as const
+}
 
 /** Great-circle path between two [lon, lat] points, as a GeoJSON LineString. */
 function greatCircle(from: [number, number], to: [number, number]) {
@@ -58,7 +82,8 @@ export default function NetworkView({ mode }: Props) {
   const [focal, setFocal] = useState<string | null>(null)
   const [network, setNetwork] = useState<CountryNetwork | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [showTable, setShowTable] = useState(false)
+  const [debt, setDebt] = useState<DebtOutstanding | null>(null)
+  const [holders, setHolders] = useState<HolderBreakdown | null>(null)
   const liveRegion = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -70,6 +95,10 @@ export default function NetworkView({ mode }: Props) {
         setManifest(mf)
       })
       .catch((e) => setError(String(e)))
+
+    // Debt context loads independently: if BIS is unavailable the map still works.
+    loadDebtOutstanding().then(setDebt).catch(() => setDebt(null))
+    loadHoldersUSA().then(setHolders).catch(() => setHolders(null))
   }, [])
 
   useEffect(() => {
@@ -86,14 +115,48 @@ export default function NetworkView({ mode }: Props) {
     }
   }, [focal])
 
+  const [mapRef, box] = useMeasure<HTMLDivElement>()
+
+  /**
+   * Clip Antarctica out of the fitted extent. It carries no data, is hatched as "no data",
+   * and consumed roughly a sixth of the vertical space -- so excluding it lets the populated
+   * part of the world fill the panel instead of floating in a band of empty ice.
+   */
   const projection = useMemo(
-    () => geoEqualEarth().fitExtent([[8, 8], [WIDTH - 8, HEIGHT - 8]], { type: 'Sphere' }),
-    [],
+    () =>
+      geoEqualEarth().fitExtent(
+        [
+          [6, 6],
+          [box.width - 6, box.height - 6],
+        ],
+        {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [-180, 84],
+              [180, 84],
+              [180, -58],
+              [-180, -58],
+              [-180, 84],
+            ],
+          ],
+        } as never,
+      ),
+    [box],
   )
   const path = useMemo(() => geoPath(projection), [projection])
 
+  /**
+   * Antarctica is dropped, not just excluded from the fit. It has no sovereign issuer, so it
+   * rendered as a wide "no data" hatch that ate roughly a sixth of the panel height.
+   */
   const countries = useMemo(
-    () => (topology ? (feature(topology, topology.objects.countries) as any).features : []),
+    () =>
+      topology
+        ? (feature(topology, topology.objects.countries) as any).features.filter(
+            (f: any) => f.id !== 'ATA',
+          )
+        : [],
     [topology],
   )
 
@@ -186,21 +249,30 @@ export default function NetworkView({ mode }: Props) {
     : []
 
   return (
-    <div style={{ background: ink.plane, color: ink.textPrimary, minHeight: '100vh', padding: 20 }}>
-      <header style={{ maxWidth: 1400, margin: '0 auto 12px' }}>
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 650 }}>Who finances whom</h1>
-        <p style={{ margin: '4px 0 0', color: ink.textSecondary, fontSize: 13 }}>
-          Cross-border holdings of debt securities. Click a country to see its creditors and
-          debtors.{' '}
-          {manifest && (
-            <span>
-              Data as of {manifest.sources.imf_pip?.as_of ?? '—'} (IMF PIP, semi-annual).
-            </span>
-          )}
+    // Full-viewport shell: the page itself never scrolls, panels scroll internally. This is
+    // what removes the dead band that appeared below a fixed-aspect map.
+    <div
+      style={{
+        background: ink.plane,
+        color: ink.textPrimary,
+        height: '100dvh',
+        display: 'grid',
+        gridTemplateRows: 'auto minmax(0,1fr)',
+        gap: 10,
+        padding: '14px 16px 16px',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+      }}
+    >
+      <header style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', paddingRight: 44 }}>
+        <h1 style={{ margin: 0, fontSize: 18, fontWeight: 650 }}>Who finances whom</h1>
+        <p style={{ margin: 0, color: ink.textSecondary, fontSize: 12 }}>
+          Cross-border holdings of debt securities — click a country for its creditors and debtors.
+          {manifest && ` Holdings as of ${manifest.sources.imf_pip?.as_of ?? '—'} (IMF PIP).`}
         </p>
         {staleSources.length > 0 && (
-          <p style={{ margin: '6px 0 0', fontSize: 12, color: status.warning }}>
-            ⚠ Stale sources: {staleSources.map(([n]) => n).join(', ')} — showing last good data.
+          <p style={{ margin: 0, fontSize: 11, color: status.warning }}>
+            ⚠ stale: {staleSources.map(([n]) => n).join(', ')}
           </p>
         )}
       </header>
@@ -208,24 +280,28 @@ export default function NetworkView({ mode }: Props) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0,1fr) 380px',
-          gap: 16,
-          maxWidth: 1400,
-          margin: '0 auto',
-          alignItems: 'start',
+          gridTemplateColumns: 'minmax(0,1fr) 400px',
+          gap: 12,
+          minHeight: 0,
         }}
       >
+        {/* Left column: map fills the free space, debt panel takes what it needs below. */}
+        <div style={{ display: 'grid', gridTemplateRows: 'minmax(0,1fr) auto', gap: 10, minHeight: 0 }}>
         <section
           style={{
             background: ink.surface,
             border: `1px solid ${ink.border}`,
             borderRadius: 10,
             padding: 10,
+            display: 'grid',
+            gridTemplateRows: 'minmax(0,1fr) auto',
+            minHeight: 0,
           }}
         >
+          <div ref={mapRef} style={{ minHeight: 0, position: 'relative' }}>
           <svg
-            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-            style={{ width: '100%', height: 'auto', display: 'block' }}
+            viewBox={`0 0 ${box.width} ${box.height}`}
+            style={{ width: '100%', height: '100%', display: 'block' }}
             role="img"
             aria-label="World map of net creditor and debtor positions"
           >
@@ -296,12 +372,13 @@ export default function NetworkView({ mode }: Props) {
                       d={d}
                       stroke={roles[e.direction]}
                       strokeWidth={w}
-                      strokeDasharray={e.instrument === 'all_debt' ? '6 3' : undefined}
                       opacity={0.85}
                     >
                       <title>
-                        {e.creditor} → {e.debtor}: {formatUSD(e.usd)} (
-                        {e.instrument === 'government' ? 'government bonds' : 'all debt securities'}
+                        {e.creditor} → {e.debtor}: {formatUSD(e.usd)} (all debt securities
+                        {e.usd_government
+                          ? `; government portion ${formatUSD(e.usd_government)}`
+                          : ''}
                         {e.conduit ? ', conduit jurisdiction' : ''})
                       </title>
                     </path>
@@ -310,35 +387,65 @@ export default function NetworkView({ mode }: Props) {
               })}
             </g>
           </svg>
+          </div>
 
-          <Legend mode={mode} focal={focal} />
-          {focal && hiddenEdges > 0 && (
-            <p style={{ margin: '4px 0 0', fontSize: 11, color: ink.muted }}>
-              Showing the {ARC_CAP} largest flows each way. {hiddenEdges} smaller ones are in the
-              table but not drawn, to keep the map legible.
-            </p>
-          )}
+          <div>
+            <Legend mode={mode} focal={focal} />
+            {focal && hiddenEdges > 0 && (
+              <p style={{ margin: '3px 0 0', fontSize: 10.5, color: ink.muted }}>
+                Showing the {ARC_CAP} largest flows each way; {hiddenEdges} smaller ones are in
+                the table but not drawn, to keep the map legible.
+              </p>
+            )}
+          </div>
         </section>
 
-        <aside style={{ display: 'grid', gap: 12 }}>
+          <DebtStrip
+            mode={mode}
+            debt={debt}
+            holders={holders}
+            focal={focal}
+            onSelect={setFocal}
+          />
+        </div>
+
+        <aside
+          style={{
+            display: 'grid',
+            gap: 10,
+            gridAutoRows: 'min-content',
+            overflowY: 'auto',
+            minHeight: 0,
+            paddingRight: 2,
+          }}
+        >
           <Panel mode={mode} title={focal ?? 'Select a country'}>
             {!focal && (
-              <p style={{ color: ink.textSecondary, fontSize: 13, margin: 0 }}>
-                The map shows <strong>net position</strong>: blue countries hold more of others'
-                debt than others hold of theirs; red are net debtors. Click one to see its
-                bilateral creditors and debtors.
-              </p>
+              <>
+                <p style={{ color: ink.textSecondary, fontSize: 12.5, margin: '0 0 8px' }}>
+                  The map shows <strong>net position</strong>: blue countries hold more of others'
+                  debt than others hold of theirs; red are net debtors. Click one to drill in.
+                </p>
+                <p style={{ color: ink.muted, fontSize: 11.5, margin: 0 }}>
+                  Holdings are cross-border only. The panel below gives total government debt and,
+                  for the US, every holder category — so foreign holdings can be read as a share
+                  of the whole rather than in isolation.
+                </p>
+              </>
             )}
             {focal && entry && (
               <>
                 {entry.conduit && <ConduitWarning mode={mode} />}
-                {!entry.government_only && <MixedDefinitionNote mode={mode} />}
+                {entry.government_detail < 1 && (
+                  <MixedDefinitionNote mode={mode} share={entry.government_detail} />
+                )}
                 <Ranked
                   mode={mode}
                   title="Financed by (holders of its debt)"
                   rows={network?.held_by ?? []}
                   nameOf={(e) => e.creditor}
                   accent={roles.inbound}
+                  unattributed={network?.unattributed_held_by ?? 0}
                 />
                 <Ranked
                   mode={mode}
@@ -352,28 +459,14 @@ export default function NetworkView({ mode }: Props) {
           </Panel>
 
           {offMap.length > 0 && <OffMapPanel mode={mode} rows={offMap} onSelect={setFocal} />}
+
+          <Panel mode={mode} title="All net positions">
+            <NetTable mode={mode} rows={net} onSelect={setFocal} />
+          </Panel>
         </aside>
       </div>
 
       <div ref={liveRegion} aria-live="polite" style={{ position: 'absolute', left: -9999 }} />
-
-      <div style={{ maxWidth: 1400, margin: '16px auto 0' }}>
-        <button
-          onClick={() => setShowTable((v) => !v)}
-          style={{
-            background: 'transparent',
-            border: `1px solid ${ink.border}`,
-            color: ink.textSecondary,
-            borderRadius: 6,
-            padding: '6px 10px',
-            fontSize: 12,
-            cursor: 'pointer',
-          }}
-        >
-          {showTable ? 'Hide' : 'Show'} net positions as a table
-        </button>
-        {showTable && <NetTable mode={mode} rows={net} onSelect={setFocal} />}
-      </div>
     </div>
   )
 }
@@ -434,11 +527,8 @@ function Legend({ mode, focal }: { mode: Mode; focal: string | null }) {
             <span style={{ width: 18, height: 3, background: roles.outbound, borderRadius: 2 }} />
             finances
           </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <svg width="20" height="4">
-              <line x1="0" y1="2" x2="20" y2="2" stroke={ink.muted} strokeWidth="2.5" strokeDasharray="6 3" />
-            </svg>
-            all debt securities (not government-only)
+          <span style={{ color: ink.muted }}>
+            width ∝ √value, capped — read exact amounts in the table
           </span>
         </>
       )}
@@ -468,12 +558,15 @@ function ConduitWarning({ mode }: { mode: Mode }) {
   )
 }
 
-function MixedDefinitionNote({ mode }: { mode: Mode }) {
+function MixedDefinitionNote({ mode, share }: { mode: Mode; share: number }) {
   const ink = chrome[mode]
   return (
-    <p style={{ margin: '0 0 10px', fontSize: 12, color: ink.textSecondary }}>
-      Dashed edges measure <strong>all debt securities</strong> (government, corporate and bank),
-      because this reporter does not break out issuer sector. Only 28 of 85 IMF PIP reporters do.
+    <p style={{ margin: '0 0 10px', fontSize: 11.5, color: ink.textSecondary }}>
+      Figures below measure <strong>all debt securities</strong> (government, corporate and bank)
+      so they are comparable across every pair.{' '}
+      {share === 0
+        ? 'No counterparty here reports a government-only breakdown (only 28 of 85 IMF PIP reporters do).'
+        : `${Math.round(share * 100)}% of these counterparties also report a government-only figure, shown in the gov. column.`}
     </p>
   )
 }
@@ -484,15 +577,21 @@ function Ranked({
   rows,
   nameOf,
   accent,
+  unattributed = 0,
 }: {
   mode: Mode
   title: string
   rows: Edge[]
   nameOf: (e: Edge) => string
   accent: string
+  /** Holdings no country can be credited with (reserve managers, intl. organisations). */
+  unattributed?: number
 }) {
   const ink = chrome[mode]
-  const total = rows.reduce((sum, r) => sum + r.usd, 0)
+  const attributable = rows.reduce((sum, r) => sum + r.usd, 0)
+  // The displayed total includes the unattributable bucket, because omitting it understated
+  // real foreign financing -- for the US by $2.31T.
+  const total = attributable + unattributed
   const shown = rows.slice(0, 12)
   return (
     <div style={{ marginBottom: 14 }}>
@@ -525,13 +624,8 @@ function Ranked({
                   <td style={{ padding: '3px 0', fontVariantNumeric: 'tabular-nums' }}>
                     {nameOf(e)}
                     {e.conduit && (
-                      <span title="Conduit jurisdiction" style={{ color: status.warning }}>
+                      <span title="Conduit jurisdiction — reflects fund domicile" style={{ color: status.warning }}>
                         {' '}⚠
-                      </span>
-                    )}
-                    {e.instrument === 'all_debt' && (
-                      <span title="All debt securities, not government-only" style={{ color: ink.muted }}>
-                        {' '}◑
                       </span>
                     )}
                   </td>
@@ -541,7 +635,22 @@ function Ranked({
                   <td
                     style={{
                       textAlign: 'right',
-                      width: 44,
+                      width: 52,
+                      color: ink.muted,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                    title={
+                      e.usd_government
+                        ? 'Government-only portion of this holding'
+                        : 'This reporter does not break out issuer sector'
+                    }
+                  >
+                    {e.usd_government ? formatUSD(e.usd_government) : '—'}
+                  </td>
+                  <td
+                    style={{
+                      textAlign: 'right',
+                      width: 38,
                       color: ink.muted,
                       fontVariantNumeric: 'tabular-nums',
                     }}
@@ -551,7 +660,7 @@ function Ranked({
                   <td
                     style={{
                       textAlign: 'right',
-                      width: 46,
+                      width: 44,
                       color: ink.muted,
                       fontVariantNumeric: 'tabular-nums',
                     }}
@@ -561,12 +670,43 @@ function Ranked({
                 </tr>
               )
             })}
+            {unattributed > 0 && (
+              <tr style={{ borderTop: `1px solid ${ink.grid}` }}>
+                <td
+                  style={{ padding: '3px 0', fontStyle: 'italic', color: ink.textSecondary }}
+                  title="Foreign-exchange reserve managers (SEFER) and international organisations (SSIO). PIP cannot attribute these to an individual country."
+                >
+                  Reserve managers &amp; intl. orgs.
+                </td>
+                <td
+                  style={{
+                    textAlign: 'right',
+                    fontVariantNumeric: 'tabular-nums',
+                    color: ink.textSecondary,
+                  }}
+                >
+                  {formatUSD(unattributed)}
+                </td>
+                <td style={{ textAlign: 'right', color: ink.muted }}>—</td>
+                <td
+                  style={{
+                    textAlign: 'right',
+                    color: ink.muted,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {total > 0 ? `${((unattributed / total) * 100).toFixed(0)}%` : ''}
+                </td>
+                <td />
+              </tr>
+            )}
           </tbody>
         </table>
       )}
       {rows.length > shown.length && (
-        <p style={{ margin: '4px 0 0', fontSize: 11, color: ink.muted }}>
-          + {rows.length - shown.length} smaller counterparties
+        <p style={{ margin: '4px 0 0', fontSize: 10.5, color: ink.muted }}>
+          + {rows.length - shown.length} smaller counterparties. Columns: total / government-only
+          portion / share / change.
         </p>
       )}
     </div>
