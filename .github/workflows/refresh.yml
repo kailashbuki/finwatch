@@ -1,0 +1,139 @@
+name: Refresh data and deploy
+
+# Two cadences matched to how fast each upstream actually moves. Rates are daily;
+# holdings (IMF PIP semi-annual, TIC monthly, World Bank IDS annual) are monthly.
+#
+# Note GitHub's `schedule` is best-effort: 30+ minute delays are normal and runs are
+# occasionally skipped. Harmless here because every job is idempotent -- a skipped run
+# self-heals on the next tick.
+on:
+  schedule:
+    - cron: '0 6 * * *' # daily: policy rates and yield curves
+    - cron: '0 7 1 * *' # monthly, 1st: bilateral holdings and debt outstanding
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Which tier to refresh
+        type: choice
+        options: [daily, monthly, all]
+        default: all
+  push:
+    branches: [main]
+    paths: ['ingest/**', 'web/**', '.github/workflows/**']
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write # hash-gated commit of data/dist
+  pages: write
+  id-token: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.build.outputs.stale }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Lint and test
+        run: |
+          uv run ruff check ingest/
+          uv run pytest -q
+
+      - name: Resolve tier
+        id: tier
+        run: |
+          # The monthly cron fires at 07:00 on the 1st; the daily one at 06:00.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "0 7 1 * *" ]; then
+              echo "tier=monthly" >> "$GITHUB_OUTPUT"
+            else
+              echo "tier=daily" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "tier=${{ github.event.inputs.tier || 'all' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build data artifacts
+        id: build
+        run: |
+          uv run python -m ingest.build --tier "${{ steps.tier.outputs.tier }}"
+          # Surface stale sources as a job output without failing the run: partial
+          # freshness still deploys, and the UI shows a staleness badge from the manifest.
+          STALE=$(uv run python -c "
+          import json
+          m = json.load(open('data/dist/manifest.json'))['sources']
+          print(','.join(n for n, s in m.items() if s.get('status') != 'ok'))
+          ")
+          echo "stale=$STALE" >> "$GITHUB_OUTPUT"
+          [ -n "$STALE" ] && echo "::warning::stale sources: $STALE" || true
+
+      - name: Commit data only if it changed
+        run: |
+          git config user.name  'finwatch-bot'
+          git config user.email 'finwatch-bot@users.noreply.github.com'
+          git add data/dist
+          if git diff --cached --quiet; then
+            echo "No data change; skipping commit."
+          else
+            # [skip ci] prevents the data commit from retriggering this workflow.
+            git commit -m "Refresh ${{ steps.tier.outputs.tier }} data [skip ci]"
+            git push
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build site
+        env:
+          # Project pages serve from /<repo>/; drop this for a user/org page.
+          VITE_BASE: /${{ github.event.repository.name }}/
+        run: |
+          # data/dist is symlinked into web/public for local dev but gitignored,
+          # so CI copies it in before building.
+          rm -rf web/public/data
+          cp -r data/dist web/public/data
+          cd web
+          npm ci
+          npx tsc --noEmit
+          npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: refresh
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  # Scheduled workflows are DISABLED automatically after 60 days of repository
+  # inactivity. For an unattended dashboard that is the most likely way this dies,
+  # and it dies silently. This job keeps the repo active; the UI additionally shows
+  # per-source freshness from manifest.json so staleness is visible in the product.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gautamkrishnar/keepalive-workflow@v2
+        with:
+          time_elapsed: '45'
