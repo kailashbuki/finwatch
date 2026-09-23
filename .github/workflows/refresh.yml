@@ -83,8 +83,15 @@ jobs:
           git config user.name  'finwatch-bot'
           git config user.email 'finwatch-bot@users.noreply.github.com'
           git add data/dist
-          if git diff --cached --quiet; then
-            echo "No data change; skipping commit."
+
+          # Gate on the DATA only, excluding manifest.json. The manifest carries
+          # generated_at/fetched_at wall-clock stamps that change on every single run, so
+          # including it would make the gate always fire and produce a daily commit forever
+          # -- exactly what hash-gating exists to avoid. Upstream freshness is carried by
+          # `as_of`, which only moves when the data actually moves.
+          if git diff --cached --quiet -- data/dist ':(exclude)data/dist/manifest.json'; then
+            echo "No data change; skipping commit (manifest-only churn ignored)."
+            git reset -q
           else
             # [skip ci] prevents the data commit from retriggering this workflow.
             git commit -m "Refresh ${{ steps.tier.outputs.tier }} data [skip ci]"
