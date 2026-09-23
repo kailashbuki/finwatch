@@ -109,6 +109,28 @@ of third-party series, and OECD SDMX serves the same data with no key),
 and **AidData / Horn–Reinhart–Trebesch** China-lending datasets (excellent, but no explicit
 open license — pending a decision).
 
+## Why a matrix leads, not a map
+
+The primary view is a who-finances-whom **matrix**, with the map demoted to a secondary tab.
+This is an encoding decision, not a stylistic one:
+
+- **The biggest positions belong to microstates.** Cayman ($2.13T net), Luxembourg, Ireland,
+  Bermuda, Singapore and Hong Kong are invisible dots at any map scale, and four are absent
+  from the 110m world atlas entirely. A map systematically under-represents exactly the most
+  important entities.
+- **A globe hides half the data by construction.** At any rotation the far hemisphere is not
+  visible — a permanent handicap for comparing dozens of countries.
+- **Most countries carry no signal.** On the choropleth, five countries have colour and the
+  rest are pale; the information is not geographically distributed.
+
+A matrix gives every economy identical visual weight and shows all pairs simultaneously. Colour
+carries order of magnitude in five labelled bands; the printed number carries the value. The map
+remains genuinely useful for geographic *context* and for the net-position choropleth.
+
+Rejected: a Plotly/three.js 3D globe. It would add ~1MB to an 87KB bundle, cost the validated
+palette, the no-data hatch, conduit flags and the accessibility work — and solve none of the
+three problems above.
+
 ## Map interaction
 
 - **Scroll or +/−** to zoom (1–12×), **drag** to pan, **⌂** to reset.

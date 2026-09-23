@@ -138,6 +138,24 @@ export interface Sustainability {
   rows: SustainabilityRow[]
 }
 
+/** Dense creditor x debtor matrix for the largest economies. `null` = no reported holding. */
+export interface MatrixCell {
+  usd: number
+  /** Government-only portion, where the reporter breaks out issuer sector. */
+  gov: number | null
+}
+
+export interface Matrix {
+  period: string
+  countries: string[]
+  conduit: boolean[]
+  totals: Record<string, { holds: number; held_by: number }>
+  cells: (MatrixCell | null)[][]
+  note: string
+}
+
+export const loadMatrix = () => getJSON<Matrix>('matrix.json')
+
 export const loadDebtOutstanding = () => getJSON<DebtOutstanding>('debt_outstanding.json')
 export const loadSustainability = () =>
   getJSON<Sustainability>('sustainability.json').catch(() => null)

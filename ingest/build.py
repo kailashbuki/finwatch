@@ -297,9 +297,88 @@ def _emit_holdings(holdings: pd.DataFrame) -> None:
         }
     _write("network_index", index)
     _write("periods", sorted(edges["period"].unique().tolist()))
+    _emit_matrix(current, index)
     log.info(
         "wrote net_positions.json, %d per-country network files (period %s)", len(index), latest
     )
+
+
+#: How many economies the pairwise matrix covers. Large enough to include every major creditor
+#: and the financial centres; small enough that every cell stays readable without scrolling.
+MATRIX_SIZE = 26
+
+
+def _emit_matrix(current: pd.DataFrame, index: dict[str, dict]) -> None:
+    """Emit a dense creditor x debtor matrix for the largest economies.
+
+    This is the primary view, and it exists because a map is the wrong encoding for this data:
+    the biggest positions belong to Cayman, Luxembourg, Ireland, Bermuda, Singapore and Hong
+    Kong, which are invisible dots at any map scale (four are absent from the atlas entirely).
+    A matrix gives every economy identical visual weight and shows all pairs simultaneously.
+    """
+    gross = (
+        pd.concat(
+            [
+                current.groupby("creditor")["usd"].sum(),
+                current.groupby("debtor")["usd"].sum(),
+            ],
+            axis=1,
+        )
+        .fillna(0.0)
+        .sum(axis=1)
+        .sort_values(ascending=False)
+    )
+    countries = [c for c in gross.index[:MATRIX_SIZE]]
+
+    subset = current[
+        current["creditor"].isin(countries) & current["debtor"].isin(countries)
+    ]
+    lookup = {
+        (r.creditor, r.debtor): (float(r.usd), r.usd_government, bool(r.conduit))
+        for r in subset.itertuples()
+    }
+
+    # Row-major dense cells; null marks a pair with no reported holding (not a zero).
+    cells = [
+        [
+            None
+            if creditor == debtor or (creditor, debtor) not in lookup
+            else {
+                "usd": lookup[(creditor, debtor)][0],
+                "gov": (
+                    None
+                    if lookup[(creditor, debtor)][1] is None
+                    or pd.isna(lookup[(creditor, debtor)][1])
+                    else float(lookup[(creditor, debtor)][1])
+                ),
+            }
+            for debtor in countries
+        ]
+        for creditor in countries
+    ]
+
+    _write(
+        "matrix",
+        {
+            "period": str(current["period"].max()),
+            "countries": countries,
+            "conduit": [normalize.is_conduit(c) for c in countries],
+            "totals": {
+                c: {
+                    "holds": float(index.get(c, {}).get("total_holds", 0.0)),
+                    "held_by": float(index.get(c, {}).get("total_held_by", 0.0)),
+                }
+                for c in countries
+            },
+            "cells": cells,
+            "note": (
+                "Rows finance columns. Values are all debt securities (government, corporate "
+                "and bank), the only basis reported by every reporter and therefore the only "
+                "one comparable across every pair. Blank means no reported holding, not zero."
+            ),
+        },
+    )
+    log.info("wrote matrix.json (%d x %d economies)", len(countries), len(countries))
 
 
 def _emit_debt(tables: dict[str, pd.DataFrame]) -> None:

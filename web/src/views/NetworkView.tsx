@@ -43,13 +43,16 @@ import {
   loadHoldersUSA,
   loadManifest,
   loadNetPositions,
+  loadMatrix,
   loadNetworkIndex,
   loadSustainability,
   loadTopology,
+  type Matrix,
   type Sustainability,
 } from '../lib/data'
 import { type Mode, arcWidth, chrome, diverging, divergingColor, edgeRole, status } from '../lib/palette'
 import DebtStrip from './DebtStrip'
+import MatrixView from './MatrixView'
 import SustainabilityPanel from './Sustainability'
 
 /**
@@ -128,6 +131,13 @@ export default function NetworkView({ mode }: Props) {
   const [debt, setDebt] = useState<DebtOutstanding | null>(null)
   const [holders, setHolders] = useState<HolderBreakdown | null>(null)
   const [sustain, setSustain] = useState<Sustainability | null>(null)
+  const [matrix, setMatrix] = useState<Matrix | null>(null)
+  /**
+   * The matrix leads because a map is the wrong encoding for this data: the largest positions
+   * belong to microstates that are invisible at any map scale. The map is kept for geographic
+   * context, not as the primary read.
+   */
+  const [tab, setTab] = useState<'matrix' | 'map'>('matrix')
   const liveRegion = useRef<HTMLDivElement>(null)
   const asideRef = useRef<HTMLElement>(null)
 
@@ -145,6 +155,7 @@ export default function NetworkView({ mode }: Props) {
     loadDebtOutstanding().then(setDebt).catch(() => setDebt(null))
     loadHoldersUSA().then(setHolders).catch(() => setHolders(null))
     loadSustainability().then(setSustain).catch(() => setSustain(null))
+    loadMatrix().then(setMatrix).catch(() => setMatrix(null))
   }, [])
 
   useEffect(() => {
@@ -524,19 +535,41 @@ export default function NetworkView({ mode }: Props) {
           minHeight: 0,
         }}
       >
-        {/* Left column: map fills the free space, debt panel takes what it needs below. */}
+        {/* Left column: primary view fills the free space, debt panel takes what it needs below. */}
         <div style={{ display: 'grid', gridTemplateRows: 'minmax(0,1fr) auto', gap: 10, minHeight: 0 }}>
         <section
+          hidden={tab !== 'matrix'}
+          style={{
+            background: ink.surface,
+            border: `1px solid ${ink.border}`,
+            borderRadius: 10,
+            padding: 12,
+            display: tab === 'matrix' ? 'grid' : 'none',
+            gridTemplateRows: 'auto minmax(0,1fr)',
+            gap: 8,
+            minHeight: 0,
+          }}
+        >
+          <ViewTabs mode={mode} tab={tab} onChange={setTab} />
+          <MatrixView mode={mode} matrix={matrix} focal={focal} onSelect={setFocal} />
+        </section>
+
+        <section
+          hidden={tab !== 'map'}
           style={{
             background: ink.surface,
             border: `1px solid ${ink.border}`,
             borderRadius: 10,
             padding: 10,
-            display: 'grid',
-            gridTemplateRows: 'minmax(0,1fr) auto',
+            // `display: none` (not just `hidden`) so the hidden panel has zero measured size --
+            // otherwise the ResizeObserver would keep refitting the projection to a stale box.
+            display: tab === 'map' ? 'grid' : 'none',
+            gridTemplateRows: 'auto minmax(0,1fr) auto',
+            gap: 8,
             minHeight: 0,
           }}
         >
+          <ViewTabs mode={mode} tab={tab} onChange={setTab} />
           <div ref={mapRef} style={{ minHeight: 0, position: 'relative' }}>
           <MapToolbar
             mode={mode}
@@ -865,6 +898,53 @@ export default function NetworkView({ mode }: Props) {
       </div>
 
       <div ref={liveRegion} aria-live="polite" style={{ position: 'absolute', left: -9999 }} />
+    </div>
+  )
+}
+
+function ViewTabs({
+  mode,
+  tab,
+  onChange,
+}: {
+  mode: Mode
+  tab: 'matrix' | 'map'
+  onChange: (t: 'matrix' | 'map') => void
+}) {
+  const ink = chrome[mode]
+  const tabs: { key: 'matrix' | 'map'; label: string; hint: string }[] = [
+    {
+      key: 'matrix',
+      label: 'Matrix',
+      hint: 'Every pair at once, every economy at equal weight',
+    },
+    {
+      key: 'map',
+      label: 'Map',
+      hint: 'Geographic context. Note financial centres are too small to render',
+    },
+  ]
+  return (
+    <div style={{ display: 'flex', gap: 2 }}>
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          onClick={() => onChange(t.key)}
+          title={t.hint}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: `2px solid ${tab === t.key ? ink.textPrimary : 'transparent'}`,
+            color: tab === t.key ? ink.textPrimary : ink.muted,
+            fontWeight: tab === t.key ? 650 : 500,
+            fontSize: 12,
+            padding: '2px 9px 4px',
+            cursor: 'pointer',
+          }}
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   )
 }
