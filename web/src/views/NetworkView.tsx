@@ -292,7 +292,10 @@ export default function NetworkView({ mode }: Props) {
     drag.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId }
     moved.current = false
     setGrabbing(true)
-    event.currentTarget.setPointerCapture(event.pointerId)
+    // Deliberately NOT capturing the pointer here. Pointer capture retargets subsequent
+    // events to the capturing element, so the `click` was delivered to the <svg> instead of
+    // the country <path> and selecting a country by clicking the map silently did nothing.
+    // Capture is acquired lazily in onPointerMove, only once a real drag begins.
   }
 
   const onPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -318,7 +321,12 @@ export default function NetworkView({ mode }: Props) {
     if (!start) return
     const dx = event.clientX - start.x
     const dy = event.clientY - start.y
-    if (Math.abs(dx) + Math.abs(dy) > 3) moved.current = true
+    if (Math.abs(dx) + Math.abs(dy) > 3 && !moved.current) {
+      moved.current = true
+      // Now that this is a genuine drag, capture so it keeps tracking outside the element.
+      // Acquiring it here rather than on pointerdown keeps plain clicks on their real target.
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
     drag.current = { ...start, x: event.clientX, y: event.clientY }
 
     setView((v) => {
@@ -535,8 +543,19 @@ export default function NetworkView({ mode }: Props) {
           minHeight: 0,
         }}
       >
-        {/* Left column: primary view fills the free space, debt panel takes what it needs below. */}
-        <div style={{ display: 'grid', gridTemplateRows: 'minmax(0,1fr) auto', gap: 10, minHeight: 0 }}>
+        {/* Left column: tabs, then the primary view, then the debt panel. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateRows: 'auto minmax(0,1fr) auto',
+            gap: 8,
+            minHeight: 0,
+          }}
+        >
+        {/* Rendered ONCE, outside both panels: a copy inside each left two identical
+            button sets in the DOM, one of them invisible. */}
+        <ViewTabs mode={mode} tab={tab} onChange={setTab} />
+
         <section
           hidden={tab !== 'matrix'}
           style={{
@@ -545,12 +564,9 @@ export default function NetworkView({ mode }: Props) {
             borderRadius: 10,
             padding: 12,
             display: tab === 'matrix' ? 'grid' : 'none',
-            gridTemplateRows: 'auto minmax(0,1fr)',
-            gap: 8,
             minHeight: 0,
           }}
         >
-          <ViewTabs mode={mode} tab={tab} onChange={setTab} />
           <MatrixView mode={mode} matrix={matrix} focal={focal} onSelect={setFocal} />
         </section>
 
@@ -564,12 +580,11 @@ export default function NetworkView({ mode }: Props) {
             // `display: none` (not just `hidden`) so the hidden panel has zero measured size --
             // otherwise the ResizeObserver would keep refitting the projection to a stale box.
             display: tab === 'map' ? 'grid' : 'none',
-            gridTemplateRows: 'auto minmax(0,1fr) auto',
-            gap: 8,
+            gridTemplateRows: 'minmax(0,1fr) auto',
+            gap: 6,
             minHeight: 0,
           }}
         >
-          <ViewTabs mode={mode} tab={tab} onChange={setTab} />
           <div ref={mapRef} style={{ minHeight: 0, position: 'relative' }}>
           <MapToolbar
             mode={mode}

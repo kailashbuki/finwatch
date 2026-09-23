@@ -10,6 +10,24 @@
       content="Interactive map of cross-border sovereign debt holdings: which countries finance which, from IMF PIP, plus policy rates and government bond yields."
     />
     <meta name="color-scheme" content="light dark" />
+    <style>
+      /*
+        Country paths are tabIndex=0 so they are keyboard reachable. Chrome then draws its
+        default focus ring on mouse click too, and for an SVG path that ring is a rectangle
+        around the path's bounding box -- which for the USA spans Alaska to Maine and read as a
+        stray blue box across North America.
+
+        Suppress the ring on plain :focus, keep it on :focus-visible so keyboard users still get
+        a clear indicator. Accessibility is preserved; only the mouse-click artifact is removed.
+      */
+      svg [tabindex]:focus {
+        outline: none;
+      }
+      svg [tabindex]:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: 1px;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

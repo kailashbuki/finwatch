@@ -25,32 +25,43 @@ const SORTS: { key: SortKey; label: string; hint: string }[] = [
   { key: 'alpha', label: 'A–Z', hint: 'alphabetical' },
 ]
 
+type ValueMode = 'abs' | 'share'
+
 /**
- * Explicit order-of-magnitude bands rather than a continuous ramp.
+ * Banding, and the reason only the top bands get a fill.
  *
- * Two earlier attempts failed for opposite reasons. Dividing `log10(usd)` by `log10(max)`
- * squashed the whole $1B-$1T range into the top third of the ramp. Normalising log between the
- * observed min and max spread it correctly, but a 9-step single-hue ramp is perceptually mushy
- * in a 21px cell -- adjacent steps were indistinguishable.
+ * Earlier attempts: dividing `log10(usd)` by `log10(max)` squashed the whole $1B-$1T range into
+ * the top third of a ramp; normalising log between observed min and max spread it correctly but
+ * a 9-step single-hue ramp is mushy in a 21px cell. Discrete bands fixed the separation.
  *
- * Discrete decade bands fix both: five clearly separated fills, and a reader can decode any
- * cell from the legend without eyeballing a gradient. Colour carries the order of magnitude;
- * the printed number carries the value.
+ * But banding alone still failed the real test: with all 650 cells filled, the grid read as a
+ * uniform blue wash and nothing stood out. Most cells are small and are simply noise at this
+ * scale. So the two lowest bands get **no fill at all** -- the number is still printed, and ink
+ * is spent only where the flow is material. That is what makes the structure legible.
  */
-const BANDS: { limit: number; label: string }[] = [
-  { limit: 1e9, label: '<1' },
-  { limit: 1e10, label: '1–10' },
-  { limit: 1e11, label: '10–100' },
-  { limit: 5e11, label: '100–500' },
-  { limit: Infinity, label: '>500' },
+const ABS_BANDS: { limit: number; label: string }[] = [
+  { limit: 1e10, label: '<10' },
+  { limit: 5e10, label: '10–50' },
+  { limit: 2e11, label: '50–200' },
+  { limit: 7.5e11, label: '200–750' },
+  { limit: Infinity, label: '>750' },
 ]
 
-/** Ramp indices chosen for maximum separation across five bands. */
-const BAND_STEPS = [0, 2, 4, 6, 8]
+/** Share of the borrower's total foreign financing. Each column sums to 100%. */
+const SHARE_BANDS: { limit: number; label: string }[] = [
+  { limit: 0.01, label: '<1%' },
+  { limit: 0.03, label: '1–3%' },
+  { limit: 0.08, label: '3–8%' },
+  { limit: 0.2, label: '8–20%' },
+  { limit: Infinity, label: '>20%' },
+]
 
-function band(usd: number): number {
-  for (let i = 0; i < BANDS.length; i += 1) if (usd < BANDS[i].limit) return i
-  return BANDS.length - 1
+/** Ramp indices per band. `-1` means no fill: the two lowest bands are left unpainted. */
+const BAND_STEPS = [-1, -1, 3, 6, 8]
+
+function band(value: number, bands: { limit: number }[]): number {
+  for (let i = 0; i < bands.length; i += 1) if (value < bands[i].limit) return i
+  return bands.length - 1
 }
 
 export default function MatrixView({
@@ -67,7 +78,21 @@ export default function MatrixView({
   const ink = chrome[mode]
   const ramp = sequential[mode]
   const [sort, setSort] = useState<SortKey>('holds')
+  const [valueMode, setValueMode] = useState<ValueMode>('share')
   const [hover, setHover] = useState<{ row: number; col: number } | null>(null)
+
+  /**
+   * Column totals: each borrower's total foreign financing from the economies shown.
+   * Share mode divides by these, so a column sums to 100% and reads directly as dependency --
+   * "the US draws 24% of its foreign financing from Cayman" -- which absolute dollars cannot
+   * convey without the reader doing the arithmetic.
+   */
+  const columnTotals = useMemo(() => {
+    if (!matrix) return []
+    return matrix.countries.map((_, col) =>
+      matrix.cells.reduce((sum, row) => sum + (row[col]?.usd ?? 0), 0),
+    )
+  }, [matrix])
 
   const ordered = useMemo(() => {
     if (!matrix) return []
@@ -102,7 +127,33 @@ export default function MatrixView({
         <span style={{ fontSize: 11, color: ink.muted }}>
           IMF PIP {matrix.period} · top {matrix.countries.length} economies
         </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 3, marginRight: 8 }}>
+            {(
+              [
+                ['share', '% of borrower', "each column sums to 100% — shows dependency"],
+                ['abs', '$B', 'absolute holdings in billions'],
+              ] as [ValueMode, string, string][]
+            ).map(([m, label, hint]) => (
+              <button
+                key={m}
+                onClick={() => setValueMode(m)}
+                title={hint}
+                style={{
+                  background: valueMode === m ? ink.textPrimary : 'transparent',
+                  border: `1px solid ${valueMode === m ? ink.textPrimary : ink.border}`,
+                  color: valueMode === m ? ink.surface : ink.textSecondary,
+                  borderRadius: 5,
+                  padding: '2px 7px',
+                  fontSize: 10.5,
+                  cursor: 'pointer',
+                  fontWeight: valueMode === m ? 650 : 400,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {SORTS.map((s) => (
             <button
               key={s.key}
@@ -228,10 +279,19 @@ export default function MatrixView({
                       />
                     )
                   }
-                  const b = cell ? band(cell.usd) : -1
+                  const total = columnTotals[c.i] || 1
+                  const value = cell
+                    ? valueMode === 'share'
+                      ? cell.usd / total
+                      : cell.usd
+                    : null
+                  const b =
+                    value == null
+                      ? -1
+                      : band(value, valueMode === 'share' ? SHARE_BANDS : ABS_BANDS)
                   const s = b >= 0 ? BAND_STEPS[b] : -1
                   // Ink on a dark fill must flip to stay legible.
-                  const dark = b >= 3
+                  const dark = s >= 6
                   return (
                     <td
                       key={c.country}
@@ -239,18 +299,21 @@ export default function MatrixView({
                       onClick={() => onSelect(r.country === focal ? null : r.country)}
                       title={
                         cell
-                          ? `${r.country} → ${c.country}: ${formatUSD(cell.usd)}${
-                              cell.gov ? ` (government portion ${formatUSD(cell.gov)})` : ''
-                            }`
+                          ? `${r.country} → ${c.country}: ${formatUSD(cell.usd)} — ` +
+                            `${((cell.usd / total) * 100).toFixed(1)}% of ${c.country}'s foreign financing` +
+                            (cell.gov ? ` · government portion ${formatUSD(cell.gov)}` : '')
                           : `${r.country} → ${c.country}: no reported holding`
                       }
                       style={{
-                        background: cell ? ramp[s] : 'transparent',
+                        background: s >= 0 ? ramp[s] : 'transparent',
                         color: dark
                           ? mode === 'light'
                             ? '#ffffff'
                             : '#dce8f6'
-                          : ink.textSecondary,
+                          : // Unfilled cells are background detail, so their ink recedes too.
+                            s < 0
+                            ? ink.muted
+                            : ink.textSecondary,
                         textAlign: 'right',
                         padding: '1px 3px',
                         height: 21,
@@ -260,7 +323,13 @@ export default function MatrixView({
                         fontSize: 9,
                       }}
                     >
-                      {cell ? Math.round(cell.usd / 1e9) || '<1' : ''}
+                      {value == null
+                        ? ''
+                        : valueMode === 'share'
+                          ? value >= 0.005
+                            ? Math.round(value * 100)
+                            : '·'
+                          : Math.round(value / 1e9) || '·'}
                     </td>
                   )
                 })}
@@ -272,20 +341,37 @@ export default function MatrixView({
 
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', fontSize: 10.5, color: ink.muted }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ color: ink.textSecondary }}>$B</span>
-          {BANDS.map((bnd, i) => (
-            <span key={bnd.label} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-              <span
-                style={{
-                  width: 13,
-                  height: 10,
-                  background: ramp[BAND_STEPS[i]],
-                  borderRadius: 1,
-                }}
-              />
-              {bnd.label}
-            </span>
-          ))}
+          <span style={{ color: ink.textSecondary }}>
+            {valueMode === 'share' ? '% of borrower' : '$B'}
+          </span>
+          {/* The two unfilled bands share one entry: two identical empty swatches would imply a
+              distinction the encoding does not make. */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <span
+              style={{
+                width: 13,
+                height: 10,
+                border: `1px solid ${ink.grid}`,
+                borderRadius: 1,
+              }}
+            />
+            {valueMode === 'share' ? '<3%' : '<50'}
+          </span>
+          {(valueMode === 'share' ? SHARE_BANDS : ABS_BANDS).map((bnd, i) =>
+            BAND_STEPS[i] < 0 ? null : (
+              <span key={bnd.label} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                <span
+                  style={{
+                    width: 13,
+                    height: 10,
+                    background: ramp[BAND_STEPS[i]],
+                    borderRadius: 1,
+                  }}
+                />
+                {bnd.label}
+              </span>
+            ),
+          )}
         </span>
         <span>
           <span style={{ color: status.warning }}>*</span> conduit jurisdiction — reflects fund
