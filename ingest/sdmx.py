@@ -9,6 +9,7 @@ the resulting frame.
 from __future__ import annotations
 
 import io
+import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
@@ -54,6 +55,41 @@ def to_frame(source: bytes | str | Path | IO[bytes]) -> pd.DataFrame:
     rows = list(iter_observations(source))
     if not rows:
         return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    if "OBS_VALUE" in frame:
+        frame["OBS_VALUE"] = pd.to_numeric(frame["OBS_VALUE"], errors="coerce")
+    return frame
+
+
+def json_to_frame(payload: bytes | dict) -> pd.DataFrame:
+    """Parse an SDMX-JSON data message into a long-format DataFrame.
+
+    SDMX-JSON encodes series keys as colon-joined *indices* into the dimension value
+    lists (``"0:12"``), and observation keys as indices into the observation dimension,
+    so both have to be resolved back to codes. Used by BIS, which serves JSON when sent
+    ``Accept: application/vnd.sdmx.data+json`` (and XML otherwise).
+    """
+    doc = json.loads(payload) if isinstance(payload, bytes | str) else payload
+    data = doc["data"]
+    dims = data["structure"]["dimensions"]
+    series_dims = dims.get("series", [])
+    obs_dims = dims.get("observation", [])
+
+    rows: list[dict[str, object]] = []
+    for dataset in data.get("dataSets", []):
+        for key, series in dataset.get("series", {}).items():
+            indices = [int(i) for i in key.split(":")]
+            base = {
+                dim["id"]: dim["values"][idx]["id"]
+                for dim, idx in zip(series_dims, indices, strict=False)
+            }
+            for obs_key, obs in series.get("observations", {}).items():
+                row = dict(base)
+                for dim, idx in zip(obs_dims, obs_key.split(":"), strict=False):
+                    row[dim["id"]] = dim["values"][int(idx)]["id"]
+                row["OBS_VALUE"] = pd.to_numeric(obs[0], errors="coerce") if obs else None
+                rows.append(row)
+
     frame = pd.DataFrame(rows)
     if "OBS_VALUE" in frame:
         frame["OBS_VALUE"] = pd.to_numeric(frame["OBS_VALUE"], errors="coerce")
