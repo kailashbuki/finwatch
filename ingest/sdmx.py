@@ -66,17 +66,28 @@ def json_to_frame(payload: bytes | dict) -> pd.DataFrame:
 
     SDMX-JSON encodes series keys as colon-joined *indices* into the dimension value
     lists (``"0:12"``), and observation keys as indices into the observation dimension,
-    so both have to be resolved back to codes. Used by BIS, which serves JSON when sent
-    ``Accept: application/vnd.sdmx.data+json`` (and XML otherwise).
+    so both have to be resolved back to codes.
+
+    Handles both message versions in use here, which differ in a way that is easy to miss:
+    BIS serves **SDMX-JSON 1.0** with a single ``data.structure`` object, while OECD serves
+    **2.0** with a ``data.structures`` *list* that each dataSet indexes into.
     """
     doc = json.loads(payload) if isinstance(payload, bytes | str) else payload
     data = doc["data"]
-    dims = data["structure"]["dimensions"]
-    series_dims = dims.get("series", [])
-    obs_dims = dims.get("observation", [])
+
+    structures = data.get("structures")
+    if structures is None:
+        structures = [data["structure"]]
+
+    def dimensions_for(dataset: dict) -> tuple[list, list]:
+        index = dataset.get("structure", 0)
+        structure = structures[index] if index < len(structures) else structures[0]
+        dims = structure.get("dimensions", {})
+        return dims.get("series", []), dims.get("observation", [])
 
     rows: list[dict[str, object]] = []
     for dataset in data.get("dataSets", []):
+        series_dims, obs_dims = dimensions_for(dataset)
         for key, series in dataset.get("series", {}).items():
             indices = [int(i) for i in key.split(":")]
             base = {

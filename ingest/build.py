@@ -20,15 +20,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from ingest import normalize
+from ingest import normalize, sustainability
 from ingest.sources import (
     bis_cbpol,
     bis_debtsec,
     imf_pip,
     jgb_curve,
+    oecd_finmark,
     ust_curve,
     ust_ownership,
     world_geo,
+    worldbank,
 )
 
 log = logging.getLogger(__name__)
@@ -54,6 +56,18 @@ def _sources() -> list[Source]:
         Source("ust_curve", "daily", "rates", lambda: ust_curve.fetch_curve(years=UST_YEARS)),
         Source("jgb_curve", "daily", "rates", lambda: jgb_curve.fetch_curve()),
         Source("ust_debt", "daily", "debt_totals", lambda: ust_ownership.fetch_debt_totals()),
+        Source(
+            "oecd_finmark",
+            "daily",
+            "rates",
+            lambda: oecd_finmark.fetch_long_term_yields(start="2020-01"),
+        ),
+        Source(
+            "worldbank",
+            "monthly",
+            "macro",
+            lambda: worldbank.nominal_growth(worldbank.fetch_all(start=2010)),
+        ),
         Source(
             "imf_pip",
             "monthly",
@@ -340,6 +354,10 @@ def _emit_debt(tables: dict[str, pd.DataFrame]) -> None:
         _write("debt_totals_usa", _columnar(recent, ["date", "total", "held_by_public",
                                                      "intragovernmental"]))
 
+    macro = tables.get("macro")
+    if outstanding is not None and macro is not None and not macro.empty:
+        _emit_sustainability(outstanding, macro)
+
     ownership = tables.get("holders_by_class")
     if ownership is not None and not ownership.empty:
         breakdown = ust_ownership.holder_breakdown(ownership)
@@ -350,6 +368,69 @@ def _emit_debt(tables: dict[str, pd.DataFrame]) -> None:
             len(breakdown["categories"]),
             breakdown["period"],
         )
+
+
+def _emit_sustainability(outstanding: pd.DataFrame, macro: pd.DataFrame) -> None:
+    """Write per-country debt sustainability indicators.
+
+    Deliberately emits indicators and reference-point breaches, never an aggregate crisis
+    score: crisis timing turns on politics and liquidity that annual data cannot observe, and a
+    single number would imply predictive power this data does not have.
+    """
+    rates_path = DIST / "rates.json"
+    rates_source = DIST / "rates_latest.json"
+    if not rates_source.exists() and not rates_path.exists():
+        log.warning("no rates artifact yet; skipping sustainability")
+        return
+
+    rates = pd.DataFrame(
+        json.loads((rates_source if rates_source.exists() else rates_path).read_text())
+    )
+
+    debt = outstanding.copy()
+    debt["country"] = normalize.bis_to_alpha3(debt["country"], strict=False)
+    debt = debt.dropna(subset=["country"])
+
+    table = sustainability.build(debt, macro, rates)
+    table = table[~table["country"].map(normalize.is_aggregate)]
+    table["flags"] = [sustainability.flags(row) for _, row in table.iterrows()]
+
+    columns = [
+        "country",
+        "period",
+        "usd",
+        "foreign_usd",
+        "foreign_share",
+        "gdp_usd",
+        "debt_pct_gdp",
+        "interest_pct_revenue",
+        "long_yield_pct",
+        "policy_rate_pct",
+        "nominal_growth_3y_pct",
+        "r_minus_g",
+        "reserve_cover",
+        "monetary_sovereignty",
+        "flags",
+    ]
+    present = [c for c in columns if c in table.columns]
+
+    _write(
+        "sustainability",
+        {
+            "note": (
+                "Vulnerability indicators, not a forecast. Debt levels alone do not predict "
+                "crises -- Japan carries the heaviest burden in the developed world and has "
+                "been stable for decades, while smaller euro-area debts became crises in "
+                "2010-12. What differs is structure: currency denomination, who holds the "
+                "debt, and whether yields exceed nominal growth. Thresholds are conventional "
+                "reference points, not cliff edges."
+            ),
+            "thresholds": {k: v[1] for k, v in sustainability.FLAGS.items()},
+            "rows": _records(table[present].sort_values("debt_pct_gdp", ascending=False)),
+        },
+    )
+    covered = int(table["debt_pct_gdp"].notna().sum())
+    log.info("wrote sustainability.json (%d countries with debt/GDP)", covered)
 
 
 def build(tier: str = "all") -> dict:
