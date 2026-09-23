@@ -1,43 +1,38 @@
 {
-  "generated_at": "2026-09-23T17:33:40+00:00",
-  "tier": "daily",
+  "generated_at": "2026-09-23T17:55:30+00:00",
+  "tier": "all",
   "sources": {
     "bis_cbpol": {
       "status": "ok",
       "rows": 296048,
       "as_of": "2026-09-15",
-      "fetched_at": "2026-09-23T17:33:38+00:00",
-      "duration_s": 1.9,
+      "fetched_at": "2026-09-23T17:52:45+00:00",
+      "duration_s": 5.1,
       "tier": "daily"
     },
     "ust_curve": {
       "status": "ok",
       "rows": 21565,
       "as_of": "2026-09-22",
-      "fetched_at": "2026-09-23T17:33:38+00:00",
-      "duration_s": 0.1,
+      "fetched_at": "2026-09-23T17:54:49+00:00",
+      "duration_s": 123.9,
       "tier": "daily"
     },
     "jgb_curve": {
       "status": "ok",
       "rows": 163567,
       "as_of": "2026-08-31",
-      "fetched_at": "2026-09-23T17:33:38+00:00",
-      "duration_s": 0.3,
+      "fetched_at": "2026-09-23T17:54:52+00:00",
+      "duration_s": 3.2,
       "tier": "daily"
     },
     "imf_pip": {
       "status": "ok",
       "rows": 373750,
       "as_of": "2024",
-      "fetched_at": "2026-09-23T17:29:51+00:00",
-      "duration_s": 1.4,
+      "fetched_at": "2026-09-23T17:55:27+00:00",
+      "duration_s": 35.7,
       "tier": "monthly"
-    },
-    "world_geo": {
-      "status": "ok",
-      "bytes": 107527,
-      "tier": "static"
     }
   }
 }
