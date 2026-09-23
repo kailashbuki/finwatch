@@ -55,22 +55,37 @@ import SustainabilityPanel from './Sustainability'
 /**
  * Measure a container so the map can fill the space actually available.
  *
- * A fixed viewBox left the map in a 2:1 box with dead space below it on any taller window.
- * The projection is refitted to the measured box instead.
+ * Uses a **callback ref**, not `useRef` + `useEffect([])`. That earlier version was silently
+ * broken: this component early-returns a loading state while data fetches, so the measured div
+ * does not exist when a mount effect runs. `ref.current` was null, the effect bailed, and with
+ * empty deps it never retried -- leaving the viewBox pinned at the 960x480 default forever
+ * while the real element was e.g. 1046x672. The map was letterboxed inside its own panel.
+ *
+ * A callback ref fires whenever the node attaches or detaches, so it survives the element
+ * appearing later, and any future conditional rendering.
  */
 function useMeasure<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null)
   const [box, setBox] = useState({ width: 960, height: 480 })
-  useEffect(() => {
-    const element = ref.current
-    if (!element) return
-    const observer = new ResizeObserver(([entry]) => {
+  const observer = useRef<ResizeObserver | null>(null)
+
+  const ref = useCallback((node: T | null) => {
+    observer.current?.disconnect()
+    if (!node) return
+    observer.current = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect
-      if (width > 40 && height > 40) setBox({ width, height })
+      if (width > 40 && height > 40) {
+        setBox((previous) =>
+          // Guard against a resize loop: only commit genuinely different sizes.
+          Math.abs(previous.width - width) < 0.5 && Math.abs(previous.height - height) < 0.5
+            ? previous
+            : { width, height },
+        )
+      }
     })
-    observer.observe(element)
-    return () => observer.disconnect()
+    observer.current.observe(node)
   }, [])
+
+  useEffect(() => () => observer.current?.disconnect(), [])
   return [ref, box] as const
 }
 
@@ -659,12 +674,13 @@ export default function NetworkView({ mode }: Props) {
               stroke="none"
               filter={view.mode === 'globe' ? 'url(#globe-lift)' : undefined}
             />
+            {/* Graticule needs its own tone: ink.grid is nearly identical to the ocean fill,
+                so the previous version was drawn but invisible. */}
             <path
               d={path(graticule) ?? ''}
               fill="none"
-              stroke={ink.grid}
-              strokeWidth={0.5}
-              opacity={view.mode === 'globe' ? 0.75 : 0.5}
+              stroke={mode === 'light' ? 'rgba(80,105,135,.22)' : 'rgba(150,180,215,.16)'}
+              strokeWidth={0.6}
               vectorEffect="non-scaling-stroke"
             />
 
