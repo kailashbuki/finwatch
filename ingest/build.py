@@ -21,7 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from ingest import normalize
-from ingest.sources import bis_cbpol, imf_pip, jgb_curve, ust_curve
+from ingest.sources import bis_cbpol, imf_pip, jgb_curve, ust_curve, world_geo
 
 log = logging.getLogger(__name__)
 
@@ -267,6 +267,15 @@ def build(tier: str = "all") -> dict:
 
     if holdings is not None and not holdings.empty:
         _emit_holdings(holdings)
+
+    # Map geometry rarely changes, so emit it whenever it is missing rather than per tier.
+    if not (DIST / "world.topo.json").exists():
+        try:
+            size = _write("world.topo", world_geo.fetch_world_topology())
+            manifest["world_geo"] = {"status": "ok", "bytes": size, "tier": "static"}
+        except Exception as exc:  # noqa: BLE001
+            log.error("world geometry failed: %s", exc)
+            manifest["world_geo"] = {"status": "stale", "error": str(exc)[:300]}
 
     payload = {
         "generated_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
