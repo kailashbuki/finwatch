@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-01T12:07:45+00:00",
-  "tier": "daily",
+  "generated_at": "2026-11-01T14:01:53+00:00",
+  "tier": "monthly",
   "sources": {
     "bis_cbpol": {
       "status": "ok",
@@ -44,34 +44,34 @@
     },
     "worldbank": {
       "status": "ok",
-      "rows": 4065,
+      "rows": 4083,
       "as_of": null,
-      "fetched_at": "2026-10-01T14:10:11+00:00",
-      "duration_s": 2.3,
+      "fetched_at": "2026-11-01T14:01:37+00:00",
+      "duration_s": 8.3,
       "tier": "monthly"
     },
     "imf_pip": {
       "status": "ok",
-      "rows": 373750,
-      "as_of": "2024",
-      "fetched_at": "2026-10-01T14:12:16+00:00",
-      "duration_s": 125.3,
+      "rows": 419753,
+      "as_of": "2025",
+      "fetched_at": "2026-11-01T14:01:50+00:00",
+      "duration_s": 12.6,
       "tier": "monthly"
     },
     "bis_debtsec": {
       "status": "ok",
       "rows": 1821,
       "as_of": "2026-Q1",
-      "fetched_at": "2026-10-01T14:12:17+00:00",
-      "duration_s": 1.0,
+      "fetched_at": "2026-11-01T14:01:51+00:00",
+      "duration_s": 1.2,
       "tier": "monthly"
     },
     "ust_ownership": {
       "status": "ok",
       "rows": 784,
       "as_of": "2026-06-30",
-      "fetched_at": "2026-10-01T14:12:18+00:00",
-      "duration_s": 0.4,
+      "fetched_at": "2026-11-01T14:01:52+00:00",
+      "duration_s": 0.5,
       "tier": "monthly"
     }
   }
