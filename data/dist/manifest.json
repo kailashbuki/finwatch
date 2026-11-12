@@ -1,44 +1,44 @@
 {
-  "generated_at": "2026-11-11T13:02:00+00:00",
+  "generated_at": "2026-11-12T14:03:44+00:00",
   "tier": "daily",
   "sources": {
     "bis_cbpol": {
       "status": "ok",
-      "rows": 297526,
-      "as_of": "2026-11-03",
-      "fetched_at": "2026-11-11T12:59:43+00:00",
-      "duration_s": 8.7,
+      "rows": 297714,
+      "as_of": "2026-11-10",
+      "fetched_at": "2026-11-12T14:01:29+00:00",
+      "duration_s": 5.9,
       "tier": "daily"
     },
     "ust_curve": {
       "status": "ok",
       "rows": 22041,
       "as_of": "2026-11-10",
-      "fetched_at": "2026-11-11T13:01:53+00:00",
-      "duration_s": 130.5,
+      "fetched_at": "2026-11-12T14:03:38+00:00",
+      "duration_s": 129.0,
       "tier": "daily"
     },
     "jgb_curve": {
       "status": "ok",
       "rows": 164167,
       "as_of": "2026-10-30",
-      "fetched_at": "2026-11-11T13:01:58+00:00",
-      "duration_s": 4.5,
+      "fetched_at": "2026-11-12T14:03:42+00:00",
+      "duration_s": 3.2,
       "tier": "daily"
     },
     "ust_debt": {
       "status": "ok",
       "rows": 400,
       "as_of": "2026-11-09",
-      "fetched_at": "2026-11-11T13:01:58+00:00",
-      "duration_s": 0.5,
+      "fetched_at": "2026-11-12T14:03:43+00:00",
+      "duration_s": 0.9,
       "tier": "daily"
     },
     "oecd_finmark": {
       "status": "ok",
       "rows": 324,
       "as_of": "2026-10-01",
-      "fetched_at": "2026-11-11T13:01:59+00:00",
+      "fetched_at": "2026-11-12T14:03:43+00:00",
       "duration_s": 0.5,
       "tier": "daily"
     },
