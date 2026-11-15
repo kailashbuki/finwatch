@@ -1,28 +1,28 @@
 {
-  "generated_at": "2026-11-14T12:35:23+00:00",
+  "generated_at": "2026-11-15T13:01:25+00:00",
   "tier": "daily",
   "sources": {
     "bis_cbpol": {
       "status": "ok",
       "rows": 297714,
       "as_of": "2026-11-10",
-      "fetched_at": "2026-11-14T12:33:06+00:00",
-      "duration_s": 4.9,
+      "fetched_at": "2026-11-15T12:59:14+00:00",
+      "duration_s": 5.2,
       "tier": "daily"
     },
     "ust_curve": {
       "status": "ok",
       "rows": 22069,
       "as_of": "2026-11-13",
-      "fetched_at": "2026-11-14T12:35:19+00:00",
-      "duration_s": 133.2,
+      "fetched_at": "2026-11-15T13:01:20+00:00",
+      "duration_s": 126.3,
       "tier": "daily"
     },
     "jgb_curve": {
       "status": "ok",
       "rows": 164167,
       "as_of": "2026-10-30",
-      "fetched_at": "2026-11-14T12:35:22+00:00",
+      "fetched_at": "2026-11-15T13:01:23+00:00",
       "duration_s": 2.7,
       "tier": "daily"
     },
@@ -30,15 +30,15 @@
       "status": "ok",
       "rows": 400,
       "as_of": "2026-11-12",
-      "fetched_at": "2026-11-14T12:35:22+00:00",
-      "duration_s": 0.6,
+      "fetched_at": "2026-11-15T13:01:23+00:00",
+      "duration_s": 0.4,
       "tier": "daily"
     },
     "oecd_finmark": {
       "status": "ok",
       "rows": 324,
       "as_of": "2026-10-01",
-      "fetched_at": "2026-11-14T12:35:23+00:00",
+      "fetched_at": "2026-11-15T13:01:24+00:00",
       "duration_s": 0.5,
       "tier": "daily"
     },
